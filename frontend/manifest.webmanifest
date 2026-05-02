@@ -1,0 +1,10 @@
+{
+  "name": "Gestor de Tareas PWA",
+  "short_name": "TareasPWA",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#071225",
+  "theme_color": "#0f172a",
+  "description": "PWA con Django REST y PostgreSQL",
+  "icons": []
+}
