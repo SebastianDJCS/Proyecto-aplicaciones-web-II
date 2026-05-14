@@ -56,44 +56,27 @@ TEMPLATES = [
 
 ASGI_APPLICATION = "config.asgi.application"
 
-database_url = os.getenv("DATABASE_URL")
-db_engine = os.getenv("DB_ENGINE", "django.db.backends.sqlite3")
+db_engine = os.getenv("DB_ENGINE", "django.db.backends.postgresql")
 
-if db_engine == "django.db.backends.sqlite3" or not database_url:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-        }
-    }
-elif database_url:
-    parsed_url = urlparse(database_url)
-    query_params = parse_qs(parsed_url.query)
+if db_engine == "django.db.backends.postgresql":
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
-            "NAME": parsed_url.path.lstrip("/"),
-            "USER": parsed_url.username or "",
-            "PASSWORD": parsed_url.password or "",
-            "HOST": parsed_url.hostname or "127.0.0.1",
-            "PORT": str(parsed_url.port or "5432"),
+            "NAME": os.getenv("DB_NAME", "neondb"),
+            "USER": os.getenv("DB_USER", "neondb_owner"),
+            "PASSWORD": os.getenv("DB_PASSWORD", ""),
+            "HOST": os.getenv("DB_HOST", "127.0.0.1"),
+            "PORT": os.getenv("DB_PORT", "5432"),
             "OPTIONS": {
-                **({"sslmode": query_params.get("sslmode", ["require"])[0]} if query_params.get("sslmode") else {"sslmode": os.getenv("DB_SSLMODE", "require")}),
+                "sslmode": os.getenv("DB_SSLMODE", "require"),
             },
         }
     }
 else:
     DATABASES = {
         "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": os.getenv("DB_NAME", "appdb"),
-            "USER": os.getenv("DB_USER", "appuser"),
-            "PASSWORD": os.getenv("DB_PASSWORD", "apppass"),
-            "HOST": os.getenv("DB_HOST", "127.0.0.1"),
-            "PORT": os.getenv("DB_PORT", "5432"),
-            "OPTIONS": {
-                "sslmode": os.getenv("DB_SSLMODE", "prefer"),
-            },
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
         }
     }
 

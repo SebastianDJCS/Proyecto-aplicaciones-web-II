@@ -210,12 +210,15 @@ async function apiCall(endpoint, method = "GET", body = null) {
 
 async function loginBackend(username, password) {
   try {
+    console.log("Intentando login con backend...");
     const res = await apiCall("/auth/token/", "POST", { username, password });
+    console.log("Login exitoso, token:", res.access ? "recibido" : "falta");
     state.token = res.access;
     await loadAllData();
+    console.log("Datos cargados, login completo");
     return true;
   } catch (e) {
-    toast(`Login fallido: ${e.message}`, "danger");
+    console.error("Login backend falló:", e.message);
     return false;
   }
 }
@@ -989,17 +992,8 @@ function login(username, password) {
       return;
     }
     
-    // Fallback to demo users
-    const account = Object.values(demoUsers).find((entry) => entry.username === username && entry.password === password);
-    if (!account) {
-      toast("Credenciales inválidas. Usa admin/admin o cajero/cajero (demo).", "danger");
-      return;
-    }
-    state.authenticated = true;
-    state.session = account;
-    state.activeView = account.role === "cashier" ? "point-of-sale" : "dashboard";
-    saveSession(account);
-    toast(`Bienvenido, ${account.name} (demo).`, "success");
+    // Si neither worked
+    toast("Credenciales inválidas. Usa admin / admin123", "danger");
     render();
   });
 }
@@ -1007,6 +1001,7 @@ function login(username, password) {
 function logout() {
   state.authenticated = false;
   state.session = null;
+  state.token = null;
   state.activeView = "dashboard";
   state.cart = [];
   state.cashReceived = "";
