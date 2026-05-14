@@ -1,0 +1,152 @@
+[
+{
+  "model": "api.usuario",
+  "pk": 1,
+  "fields": {
+    "password": "pbkdf2_sha256$1200000$FAPm88yBEJcPRbHXZbCm5R$CYQo2UzgypPJXmqQUq7rLGQ40gmT9wgOk44ky74DH6Y=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "demo_admin",
+    "first_name": "Demo",
+    "last_name": "Admin",
+    "email": "demo_admin@example.com",
+    "is_staff": true,
+    "is_active": true,
+    "date_joined": "2026-05-11T21:11:49.391Z",
+    "rol": "administrador",
+    "telefono": "",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "api.usuario",
+  "pk": 2,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$8XHbXwb5Iark0TYEz5dSXo$TpRwArXhaCPqGEW8zl0zIkSjCK5tJtzYjV1CTSfwCE8=",
+    "last_login": null,
+    "is_superuser": true,
+    "username": "ricardo",
+    "first_name": "",
+    "last_name": "",
+    "email": "ricardocogollo989@gmail.com",
+    "is_staff": true,
+    "is_active": true,
+    "date_joined": "2026-05-14T13:00:23.258Z",
+    "rol": "vendedor",
+    "telefono": "",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "api.proveedor",
+  "pk": "4ea3bcd7-d244-4564-b9ad-9eeee161d5d6",
+  "fields": {
+    "estado_sync": "pendiente",
+    "created_at": "2026-05-11T21:11:50.348Z",
+    "updated_at": "2026-05-11T21:11:50.348Z",
+    "nombre": "Proveedor Demo",
+    "documento_fiscal": "",
+    "contacto": "Contacto Demo",
+    "telefono": "0000-0000",
+    "correo": "demo@proveedor.test",
+    "direccion": "",
+    "activo": true
+  }
+},
+{
+  "model": "api.categoria",
+  "pk": "5e097102-140f-4c87-988a-48836948a415",
+  "fields": {
+    "estado_sync": "pendiente",
+    "created_at": "2026-05-11T21:13:59.209Z",
+    "updated_at": "2026-05-11T21:13:59.209Z",
+    "nombre": "General",
+    "descripcion": "Categoria de prueba"
+  }
+},
+{
+  "model": "api.producto",
+  "pk": "aea2f282-c5c3-428f-b7b1-7fb4b9221f14",
+  "fields": {
+    "estado_sync": "pendiente",
+    "created_at": "2026-05-11T21:13:59.606Z",
+    "updated_at": "2026-05-11T21:14:00.250Z",
+    "codigo": "PRD-DEMO-001",
+    "codigo_barras": "1234567890",
+    "nombre": "Producto Demo",
+    "descripcion": "Prueba",
+    "stock_actual": 8,
+    "stock_minimo": 2,
+    "costo": "10.00",
+    "precio_venta": "15.00",
+    "categoria": "5e097102-140f-4c87-988a-48836948a415",
+    "proveedor": "4ea3bcd7-d244-4564-b9ad-9eeee161d5d6",
+    "activo": true
+  }
+},
+{
+  "model": "api.turnocaja",
+  "pk": "2f0fe158-d7d9-4552-845e-84e5f568c223",
+  "fields": {
+    "estado_sync": "pendiente",
+    "created_at": "2026-05-11T21:11:50.866Z",
+    "updated_at": "2026-05-11T21:14:00.011Z",
+    "usuario": [
+      "demo_admin"
+    ],
+    "fecha_apertura": "2026-05-11T21:11:50.866Z",
+    "fecha_cierre": null,
+    "monto_apertura": "100.00",
+    "monto_cierre": null,
+    "total_ventas": "0.00",
+    "total_efectivo": "0.00",
+    "estado": "abierto",
+    "observaciones": ""
+  }
+},
+{
+  "model": "api.venta",
+  "pk": "6af15bfa-7c54-48ce-b262-96a58658c5fc",
+  "fields": {
+    "estado_sync": "pendiente",
+    "created_at": "2026-05-11T21:14:00.329Z",
+    "updated_at": "2026-05-11T21:14:00.412Z",
+    "turno_caja": "2f0fe158-d7d9-4552-845e-84e5f568c223",
+    "vendedor": [
+      "demo_admin"
+    ],
+    "cliente_nombre": "Cliente Demo",
+    "cliente_documento": "00000001",
+    "numero_factura": "VPR-20260511-6AF15BFA",
+    "fecha_venta": "2026-05-11T21:14:00.328Z",
+    "subtotal": "30.00",
+    "descuento_total": "0.00",
+    "impuesto_total": "0.00",
+    "total": "30.00",
+    "monto_pagado": "50.00",
+    "cambio": "20.00",
+    "medio_pago": "efectivo",
+    "estado": "pagada",
+    "observaciones": "",
+    "sincronizada_en": null
+  }
+},
+{
+  "model": "api.detalleventa",
+  "pk": "713b5531-a797-43b7-84ec-b7eda0371ddd",
+  "fields": {
+    "estado_sync": "pendiente",
+    "created_at": "2026-05-11T21:14:00.491Z",
+    "updated_at": "2026-05-11T21:14:00.491Z",
+    "venta": "6af15bfa-7c54-48ce-b262-96a58658c5fc",
+    "producto": "aea2f282-c5c3-428f-b7b1-7fb4b9221f14",
+    "cantidad": 2,
+    "precio_unitario": "15.00",
+    "descuento_unitario": "0.00",
+    "subtotal": "30.00"
+  }
+}
+]
+
