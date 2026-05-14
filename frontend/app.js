@@ -1,7 +1,10 @@
 const STORAGE_KEYS = {
   session: "ventapro-session",
   settings: "ventapro-settings",
+  appVersion: "ventapro-app-version",
 };
+
+const APP_VERSION = "2026-05-14-2";
 
 const demoUsers = {
   admin: { username: "admin", password: "admin", name: "Administrador", role: "admin", initials: "A" },
@@ -111,21 +114,14 @@ const state = {
   paymentMethod: "efectivo",
   cashReceived: "",
   token: null,
+  refresh: null,
   showModal: false,
   modalForm: null,
 };
 
+let liveSyncTimer = null;
+
 const root = document.getElementById("root");
-const storedSession = loadSession();
-if (storedSession) {
-  state.authenticated = true;
-  state.session = storedSession;
-  state.token = storedSession.token;
-  state.activeView = storedSession.role === "cashier" ? "point-of-sale" : "dashboard";
-  if (storedSession.token) {
-    loadAllData().then(() => render());
-  }
-}
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("./sw.js").catch(() => {});
@@ -140,6 +136,7 @@ window.addEventListener("offline", updateSyncBadge);
 
 render();
 setInterval(updateSyncBadge, 1000);
+ensureFreshApp().then(() => bootstrapStoredSession());
 
 function loadSession() {
   try {
@@ -157,6 +154,65 @@ function clearSession() {
   localStorage.removeItem(STORAGE_KEYS.session);
 }
 
+async function ensureFreshApp() {
+  const previousVersion = localStorage.getItem(STORAGE_KEYS.appVersion);
+  if (previousVersion === APP_VERSION) return;
+
+  localStorage.setItem(STORAGE_KEYS.appVersion, APP_VERSION);
+  try {
+    if ("serviceWorker" in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map((registration) => registration.unregister()));
+    }
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((key) => caches.delete(key)));
+    }
+  } catch (error) {
+    console.warn("No se pudo limpiar el estado antiguo del navegador:", error);
+  }
+}
+
+async function bootstrapStoredSession() {
+  const storedSession = loadSession();
+  if (!storedSession || !storedSession.token) return;
+
+  state.authenticated = true;
+  state.session = storedSession;
+  state.token = storedSession.token;
+  state.refresh = storedSession.refresh || null;
+  state.activeView = storedSession.role === "cashier" ? "point-of-sale" : "dashboard";
+
+  try {
+    await loadAllData();
+    render();
+    startLiveSync();
+  } catch (error) {
+    console.warn("Stored session rejected, clearing it:", error);
+    logout();
+  }
+}
+
+function startLiveSync() {
+  stopLiveSync();
+  liveSyncTimer = window.setInterval(async () => {
+    if (!state.authenticated || !state.token) return;
+    try {
+      await loadAllData();
+      render();
+    } catch (error) {
+      console.error("Live sync failed:", error);
+    }
+  }, 10000);
+}
+
+function stopLiveSync() {
+  if (liveSyncTimer) {
+    window.clearInterval(liveSyncTimer);
+    liveSyncTimer = null;
+  }
+}
+
 // === API WRAPPER ===
 async function apiCall(endpoint, method = "GET", body = null) {
   const headers = { "Content-Type": "application/json" };
@@ -172,12 +228,25 @@ async function apiCall(endpoint, method = "GET", body = null) {
     if (!response.ok) {
       // Intentamos leer la respuesta de Django
       const err = await response.json().catch(() => ({ detail: `Error ${response.status}` }));
-      
-      // Imprimimos el error exacto en la consola (con F12 lo verás)
       console.error(`🚨 Error del servidor en ${endpoint}:`, err);
-      
-      // Si el error es un objeto con campos (ej: {"first_name": ["This field is required."]})
-      // lo convertimos a texto para que el frontend no se rompa.
+
+      // Si es 401 por token inválido, intentamos refrescar y reintentar una vez
+      if (response.status === 401 && err && err.code === 'token_not_valid') {
+        const refreshed = await refreshToken();
+        if (refreshed) {
+          // reintentar la llamada con nuevo token
+          if (state.token) options.headers.Authorization = `Bearer ${state.token}`;
+          const retryResp = await fetch(`${API_BASE}${endpoint}`, options);
+          if (retryResp.ok) return retryResp.status === 204 ? null : await retryResp.json();
+          const retryErr = await retryResp.json().catch(() => ({ detail: `Error ${retryResp.status}` }));
+          throw new Error(retryErr.detail || JSON.stringify(retryErr));
+        } else {
+          // Si no pudimos refrescar, forzamos logout
+          logout();
+          throw new Error('Sesión expirada. Vuelve a iniciar sesión.');
+        }
+      }
+
       const errorMsg = err.detail || JSON.stringify(err);
       throw new Error(errorMsg);
     }
@@ -195,12 +264,45 @@ async function apiCall(endpoint, method = "GET", body = null) {
 async function loginBackend(username, password) {
   try {
     const res = await apiCall("/auth/token/", "POST", { username, password });
+    if (!res || !res.access) {
+      console.error("loginBackend: respuesta inválida", res);
+      toast("Error al autenticar: respuesta inválida del servidor.", "danger");
+      return false;
+    }
+
     state.token = res.access;
+    state.refresh = res.refresh;
+    // Cargamos datos protegidos con el token recién obtenido
     await loadAllData();
     render();
+    startLiveSync();
     return true;
   } catch (e) {
-    console.error("Login backend falló:", e.message);
+    console.error("Login backend falló:", e);
+    toast(`Login falló: ${e.message || e}`, "danger");
+    return false;
+  }
+}
+
+async function refreshToken() {
+  if (!state.refresh) return false;
+  try {
+    const res = await fetch(`${API_BASE}/auth/token/refresh/`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh: state.refresh })
+    });
+    if (!res.ok) return false;
+    const json = await res.json();
+    if (json.access) {
+      state.token = json.access;
+      // optionally update refresh if provided
+      if (json.refresh) state.refresh = json.refresh;
+      // persist new token
+      saveSession({ ...state.session, token: state.token, refresh: state.refresh });
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.error('refreshToken error', e);
     return false;
   }
 }
@@ -208,19 +310,27 @@ async function loginBackend(username, password) {
 async function loadAllData() {
   console.log("Cargando datos del backend...");
   try {
-    const [cashiers, products, categories, suppliers] = await Promise.all([
+    const [cashiers, products, categories, suppliers] = await Promise.allSettled([
       apiCall("/usuarios/"),
       apiCall("/productos/"),
       apiCall("/categorias/"),
       apiCall("/proveedores/")
     ]);
-    data.cashiers = cashiers;
-    data.products = products;
-    data.categories = categories;
-    data.suppliers = suppliers;
+
+    if (cashiers.status === "fulfilled") data.cashiers = cashiers.value;
+    if (products.status === "fulfilled") data.products = products.value;
+    if (categories.status === "fulfilled") data.categories = categories.value;
+    if (suppliers.status === "fulfilled") data.suppliers = suppliers.value;
+
+    const failed = [cashiers, products, categories, suppliers].filter((item) => item.status === "rejected");
+    if (failed.length) {
+      console.warn("Algunos datos no se pudieron cargar:", failed.map((item) => item.reason?.message || String(item.reason)));
+    }
+
     console.log("Datos cargados:", data.cashiers.length, "cajeros,", data.products.length, "productos");
   } catch (e) {
     console.error("Error loading data:", e);
+    throw e;
   }
 }
 
@@ -285,7 +395,7 @@ async function createSupplier(supplierData) {
 async function createSale(saleData) {
   try {
     const res = await apiCall("/ventas/", "POST", saleData);
-    data.products = await apiCall("/productos/");
+    await loadAllData();
     toast(`Venta registrada: ${res.numero_factura}`, "success");
     state.cart = [];
     state.cashReceived = "";
@@ -479,7 +589,7 @@ function dashboardView() {
     { label: "Ticket Promedio", value: 145, trend: "+5.1% vs ayer", icon: iconMoney(), tone: "green" },
     { label: "Alertas Stock", value: 3, trend: "Productos con stock bajo", icon: iconWarning(), tone: "red" },
   ];
-  const lowStock = data.products.filter((item) => item.stock <= item.minStock);
+  const lowStock = data.products.filter((item) => Number(item.stock_actual) <= Number(item.stock_minimo));
 
   return `
     <section class="view dashboard-view">
@@ -537,9 +647,9 @@ function dashboardView() {
             <tbody>
               ${lowStock.map((item) => `
                 <tr>
-                  <td>${item.name}</td>
-                  <td><span class="chip ${item.stock <= 3 ? "danger" : "warning"}">${item.stock}</span></td>
-                  <td>${item.minStock}</td>
+                  <td>${item.nombre}</td>
+                  <td><span class="chip ${Number(item.stock_actual) <= Number(item.stock_minimo) ? "danger" : "warning"}">${item.stock_actual}</span></td>
+                  <td>${item.stock_minimo}</td>
                   <td><button class="button secondary" type="button" data-action="restock" data-id="${item.id}">Reabastecer</button></td>
                 </tr>
               `).join("")}
@@ -698,7 +808,7 @@ function cashiersView() {
   const query = state.search.cashier.trim().toLowerCase();
   const cashiers = data.cashiers.filter((c) => !query || [c.first_name, c.last_name, c.username, c.telefono].some((v) => v && v.toLowerCase().includes(query)));
   const total = data.cashiers.length;
-  const active = data.cashiers.filter((c) => c.is_active).length;
+  const active = data.cashiers.filter((c) => c.is_active !== false).length;
 
   return `
     <section class="view cashiers-view">
@@ -714,11 +824,11 @@ function cashiersView() {
             <tbody>
               ${cashiers.map((cashier) => `
                 <tr>
-                  <td><strong>${cashier.first_name} ${cashier.last_name}</strong></td>
+                  <td><strong>${cashier.first_name || cashier.username} ${cashier.last_name || ""}</strong></td>
                   <td><span class="chip neutral">${cashier.username}</span></td>
                   <td>${cashier.telefono || "Sin teléfono"}</td>
                   <td><span class="chip">${cashier.rol}</span></td>
-                  <td><span class="chip ${cashier.is_active ? "success" : "danger"}">${cashier.is_active ? "Activo" : "Inactivo"}</span></td>
+                  <td><span class="chip ${(cashier.is_active !== false) ? "success" : "danger"}">${(cashier.is_active !== false) ? "Activo" : "Inactivo"}</span></td>
                   <td><div class="action-icons"><button class="icon-btn" type="button" data-action="edit-cashier" data-id="${cashier.id}">✎</button><button class="icon-btn danger" type="button" data-action="delete-cashier" data-id="${cashier.id}">🗑</button></div></td>
                 </tr>
               `).join("")}
@@ -894,6 +1004,24 @@ function handleClick(event) {
     case "bulk-upload":
       toast("Carga masiva disponible para importación de productos.", "warning");
       break;
+    case "edit-product":
+      editProduct(target.dataset.id);
+      break;
+    case "delete-product":
+      deleteProduct(target.dataset.id);
+      break;
+    case "edit-supplier":
+      editSupplier(target.dataset.id);
+      break;
+    case "delete-supplier":
+      deleteSupplier(target.dataset.id);
+      break;
+    case "edit-cashier":
+      editCashier(target.dataset.id);
+      break;
+    case "delete-cashier":
+      deleteCashier(target.dataset.id);
+      break;
     default:
       if (target.dataset.action?.startsWith("edit-") || target.dataset.action?.startsWith("delete-") || target.dataset.action === "view-order") {
         toast(actionMessage(target.dataset.action), target.dataset.action.includes("delete") ? "danger" : "warning");
@@ -992,10 +1120,14 @@ function login(username, password) {
       state.authenticated = true;
       // Obtener info del usuario logueado
       const me = await apiCall("/usuarios/me/").catch(() => null);
-      const role = me?.rol === "administrador" ? "admin" : me?.rol === "cajero" ? "cashier" : "cashier";
+      const role = me?.rol === "administrador"
+        ? "admin"
+        : me?.rol === "cajero"
+          ? "cashier"
+          : (username.toLowerCase().includes("admin") ? "admin" : "cashier");
       state.session = { username, name: me ? `${me.first_name} ${me.last_name}` : username, role, initials: username.substring(0, 1).toUpperCase() };
       state.activeView = role === "cashier" ? "point-of-sale" : "dashboard";
-      saveSession({ ...state.session, token: state.token });
+      saveSession({ ...state.session, token: state.token, refresh: state.refresh });
       toast(`Bienvenido, ${state.session.name}.`, "success");
       render();
       return;
@@ -1008,9 +1140,11 @@ function login(username, password) {
 }
 
 function logout() {
+  stopLiveSync();
   state.authenticated = false;
   state.session = null;
   state.token = null;
+  state.refresh = null;
   state.activeView = "dashboard";
   state.cart = [];
   state.cashReceived = "";
@@ -1082,14 +1216,136 @@ async function finalizeSale() {
     }))
   };
   const success = await createSale(saleData);
-  if (success) render();
+  if (success) {
+    state.activeView = "point-of-sale";
+    render();
+  }
+}
+
+function promptIfCancelled(label, currentValue = "") {
+  const value = window.prompt(label, currentValue);
+  return value === null ? null : value.trim();
+}
+
+async function editProduct(productId) {
+  const product = data.products.find((item) => item.id === productId);
+  if (!product) return;
+
+  const nombre = promptIfCancelled("Nombre del producto", product.nombre);
+  if (nombre === null) return;
+  const codigo = promptIfCancelled("Código", product.codigo);
+  if (codigo === null) return;
+  const stockActual = promptIfCancelled("Stock actual", String(product.stock_actual ?? 0));
+  if (stockActual === null) return;
+  const stockMinimo = promptIfCancelled("Stock mínimo", String(product.stock_minimo ?? 0));
+  if (stockMinimo === null) return;
+  const costo = promptIfCancelled("Costo", String(product.costo ?? 0));
+  if (costo === null) return;
+  const precioVenta = promptIfCancelled("Precio de venta", String(product.precio_venta ?? 0));
+  if (precioVenta === null) return;
+
+  await apiCall(`/productos/${productId}/`, "PATCH", {
+    nombre,
+    codigo,
+    stock_actual: Number(stockActual),
+    stock_minimo: Number(stockMinimo),
+    costo: Number(costo),
+    precio_venta: Number(precioVenta),
+  });
+  await loadAllData();
+  toast("Producto actualizado.", "success");
+  render();
+}
+
+async function deleteProduct(productId) {
+  const product = data.products.find((item) => item.id === productId);
+  if (!product) return;
+  if (!window.confirm(`Eliminar producto ${product.nombre}?`)) return;
+  await apiCall(`/productos/${productId}/`, "DELETE");
+  await loadAllData();
+  toast("Producto eliminado.", "success");
+  render();
+}
+
+async function editSupplier(supplierId) {
+  const supplier = data.suppliers.find((item) => item.id === supplierId);
+  if (!supplier) return;
+
+  const nombre = promptIfCancelled("Nombre del proveedor", supplier.nombre);
+  if (nombre === null) return;
+  const telefono = promptIfCancelled("Teléfono", supplier.telefono || "");
+  if (telefono === null) return;
+  const correo = promptIfCancelled("Correo", supplier.correo || "");
+  if (correo === null) return;
+  const direccion = promptIfCancelled("Dirección", supplier.direccion || "");
+  if (direccion === null) return;
+  const contacto = promptIfCancelled("Contacto", supplier.contacto || "");
+  if (contacto === null) return;
+
+  await apiCall(`/proveedores/${supplierId}/`, "PATCH", {
+    nombre,
+    telefono,
+    correo,
+    direccion,
+    contacto,
+    activo: supplier.activo !== false,
+  });
+  await loadAllData();
+  toast("Proveedor actualizado.", "success");
+  render();
+}
+
+async function deleteSupplier(supplierId) {
+  const supplier = data.suppliers.find((item) => item.id === supplierId);
+  if (!supplier) return;
+  if (!window.confirm(`Eliminar proveedor ${supplier.nombre}?`)) return;
+  await apiCall(`/proveedores/${supplierId}/`, "DELETE");
+  await loadAllData();
+  toast("Proveedor eliminado.", "success");
+  render();
+}
+
+async function editCashier(cashierId) {
+  const cashier = data.cashiers.find((item) => item.id === cashierId);
+  if (!cashier) return;
+
+  const firstName = promptIfCancelled("Nombre", cashier.first_name || "");
+  if (firstName === null) return;
+  const lastName = promptIfCancelled("Apellido", cashier.last_name || "");
+  if (lastName === null) return;
+  const username = promptIfCancelled("Usuario", cashier.username || "");
+  if (username === null) return;
+  const email = promptIfCancelled("Correo", cashier.email || "");
+  if (email === null) return;
+  const telefono = promptIfCancelled("Teléfono", cashier.telefono || "");
+  if (telefono === null) return;
+  const password = promptIfCancelled("Nueva contraseña (dejar vacía para no cambiar)", "");
+  if (password === null) return;
+
+  const payload = { first_name: firstName, last_name: lastName, username, email, telefono };
+  if (password) payload.password = password;
+
+  await apiCall(`/usuarios/${cashierId}/`, "PATCH", payload);
+  await loadAllData();
+  toast("Cajero actualizado.", "success");
+  render();
+}
+
+async function deleteCashier(cashierId) {
+  const cashier = data.cashiers.find((item) => item.id === cashierId);
+  if (!cashier) return;
+  if (!window.confirm(`Eliminar cajero ${cashier.username}?`)) return;
+  await apiCall(`/usuarios/${cashierId}/`, "DELETE");
+  await loadAllData();
+  toast("Cajero eliminado.", "success");
+  render();
 }
 
 function restockProduct(productId) {
   const product = data.products.find((item) => item.id === productId);
   if (!product) return;
-  product.stock += 10;
-  toast(`${product.name} reabastecido.`, "success");
+  product.stock_actual = Number(product.stock_actual || 0) + 10;
+  toast(`${product.nombre} reabastecido.`, "success");
   render();
 }
 

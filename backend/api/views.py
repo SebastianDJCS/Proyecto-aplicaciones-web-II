@@ -38,6 +38,12 @@ class UsuarioViewSet(viewsets.ModelViewSet): # Cambia temporalmente la herencia 
     serializer_class = UsuarioSerializer
     permission_classes = [IsAuthenticated] # Solo requiere estar logueado
 
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    def me(self, request):
+        """Devuelve los datos del usuario autenticado (ruta: /usuarios/me/)."""
+        serializer = self.get_serializer(request.user)
+        return Response(serializer.data)
+
 class ProveedorViewSet(viewsets.ModelViewSet):
     queryset = Proveedor.objects.all().order_by("nombre")
     serializer_class = ProveedorSerializer
