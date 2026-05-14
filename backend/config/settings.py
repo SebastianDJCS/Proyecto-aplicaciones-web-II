@@ -97,6 +97,25 @@ else:
         }
     }
 
+# Optional Neon secondary database (for syncing)
+neon_url = os.getenv("NEON_DATABASE_URL")
+if neon_url:
+    from urllib.parse import urlparse, parse_qs
+
+    parsed = urlparse(neon_url)
+    neon_query = parse_qs(parsed.query)
+    DATABASES["neon"] = {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": parsed.path.lstrip("/"),
+        "USER": parsed.username or "",
+        "PASSWORD": parsed.password or "",
+        "HOST": parsed.hostname or "127.0.0.1",
+        "PORT": str(parsed.port or "5432"),
+        "OPTIONS": {
+            **({"sslmode": neon_query.get("sslmode", ["require"])[0]} if neon_query.get("sslmode") else {}),
+        },
+    }
+
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
