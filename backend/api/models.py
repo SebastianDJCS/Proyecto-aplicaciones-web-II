@@ -7,7 +7,8 @@ from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models import Sum
 from django.utils import timezone
-
+from django.contrib.auth.models import AbstractUser
+from django.db import models
 
 class EstadoSync(models.TextChoices):
     PENDIENTE = "pendiente", "Pendiente"
@@ -25,17 +26,43 @@ class UUIDTimeStampedModel(models.Model):
         abstract = True
 
 
+
+
+# 1. Define las constantes y opciones PRIMERO
+ROL_ADMINISTRADOR = 'administrador'
+ROL_VENDEDOR = 'vendedor'
+
+ROL_CHOICES = [
+    (ROL_ADMINISTRADOR, 'Administrador'),
+    (ROL_VENDEDOR, 'Vendedor/Cajero'),
+]
+
+# 2. Ahora define la clase Usuario
 class Usuario(AbstractUser):
-    ROL_ADMINISTRADOR = "administrador"
-    ROL_VENDEDOR = "vendedor"
-    ROL_CAJERO = "cajero"
+    # Campos que ya tenías
+    telefono = models.CharField(max_length=15, blank=True, null=True)
+    
+    # Aquí ya no dará error porque ROL_CHOICES ya existe arriba
+    rol = models.CharField(
+        max_length=20, 
+        choices=ROL_CHOICES, 
+        default=ROL_VENDEDOR
+    )
 
-    ROL_CHOICES = [
-        (ROL_ADMINISTRADOR, "Administrador"),
-        (ROL_VENDEDOR, "Vendedor"),
-        (ROL_CAJERO, "Cajero"),
-    ]
+    # Recuerda mantener los related_name para evitar el error previo
+    groups = models.ManyToManyField(
+        'auth.Group',
+        related_name='usuario_groups_set',
+        blank=True
+    )
+    user_permissions = models.ManyToManyField(
+        'auth.Permission',
+        related_name='usuario_permissions_set',
+        blank=True
+    )
 
+    def __str__(self):
+        return f"{self.username} - {self.rol}"
     rol = models.CharField(max_length=20, choices=ROL_CHOICES, default=ROL_VENDEDOR)
     telefono = models.CharField(max_length=30, blank=True)
 

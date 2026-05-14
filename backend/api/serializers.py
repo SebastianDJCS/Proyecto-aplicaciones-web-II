@@ -4,47 +4,37 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from .models import Compra, Categoria, DetalleCompra, DetalleVenta, ListaPrecio, ListaPrecioItem, Producto, Proveedor, TurnoCaja, Venta
-
+from rest_framework import serializers
+from .models import Usuario
 Usuario = get_user_model()
 
 
 class UsuarioSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    # La contraseña no se devuelve en el GET y es obligatoria para nuevos usuarios
+    password = serializers.CharField(write_only=True, required=True)
+
+   # backend/api/serializers.py
+
+
+class UsuarioSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, required=True)
+    
+    # Hacemos que estos campos no sean estrictamente obligatorios si el frontend no los manda
+    email = serializers.EmailField(required=False, allow_blank=True)
+    telefono = serializers.CharField(required=False, allow_blank=True)
+    first_name = serializers.CharField(required=False, allow_blank=True)
+    last_name = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = Usuario
-        fields = [
-            "id",
-            "username",
-            "first_name",
-            "last_name",
-            "email",
-            "telefono",
-            "rol",
-            "password",
-            "is_active",
-            "is_staff",
-        ]
-        read_only_fields = ["id", "is_staff"]
+        fields = ['id', 'username', 'first_name', 'last_name', 'email', 'telefono', 'rol', 'password']
 
     def create(self, validated_data):
-        password = validated_data.pop("password", None)
-        user = Usuario(**validated_data)
-        if password:
-            user.set_password(password)
-        else:
-            user.set_unusable_password()
+        password = validated_data.pop('password')
+        user = Usuario.objects.create_user(**validated_data)
+        user.set_password(password)
         user.save()
         return user
-
-    def update(self, instance, validated_data):
-        password = validated_data.pop("password", None)
-        for attribute, value in validated_data.items():
-            setattr(instance, attribute, value)
-        if password:
-            instance.set_password(password)
-        instance.save()
-        return instance
 
 
 class ProveedorSerializer(serializers.ModelSerializer):

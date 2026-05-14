@@ -32,15 +32,11 @@ class AdministradorOnlyViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdministrador]
 
 
-class UsuarioViewSet(AdministradorOnlyViewSet):
+# Busca esta parte en views.py
+class UsuarioViewSet(viewsets.ModelViewSet): # Cambia temporalmente la herencia si es necesario
     queryset = Usuario.objects.all().order_by("username")
     serializer_class = UsuarioSerializer
-
-    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
-    def me(self, request):
-        serializer = self.get_serializer(request.user)
-        return Response(serializer.data)
-
+    permission_classes = [IsAuthenticated] # Solo requiere estar logueado
 
 class ProveedorViewSet(viewsets.ModelViewSet):
     queryset = Proveedor.objects.all().order_by("nombre")

@@ -167,13 +167,28 @@ async function apiCall(endpoint, method = "GET", body = null) {
   
   try {
     const response = await fetch(`${API_BASE}${endpoint}`, options);
+    
+    // CORRECCIÓN: Manejo detallado de errores
     if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || `Error ${response.status}`);
+      // Intentamos leer la respuesta de Django
+      const err = await response.json().catch(() => ({ detail: `Error ${response.status}` }));
+      
+      // Imprimimos el error exacto en la consola (con F12 lo verás)
+      console.error(`🚨 Error del servidor en ${endpoint}:`, err);
+      
+      // Si el error es un objeto con campos (ej: {"first_name": ["This field is required."]})
+      // lo convertimos a texto para que el frontend no se rompa.
+      const errorMsg = err.detail || JSON.stringify(err);
+      throw new Error(errorMsg);
     }
+    
+    // Si la respuesta es 204 (No Content), no intentamos parsear JSON
+    if (response.status === 204) return null;
+    
     return await response.json();
   } catch (e) {
-    throw new Error(e.message);
+    // Relanzamos el error tal cual para que createCashier lo pueda atrapar
+    throw e;
   }
 }
 
@@ -210,17 +225,36 @@ async function loadAllData() {
 }
 
 async function createCashier(userData) {
+  // Transformamos el objeto que recibe del formulario para que encaje 
+  // exactamente con lo que el Serializer de Django exige:
+  const cashierData = {
+    username: userData.username,
+    password: userData.password,
+    first_name: userData.nombre || "",    // Toma el campo 'nombre' del form
+    last_name: userData.apellido || "",   // Toma el campo 'apellido' del form
+    rol: "vendedor",                      // O 'cajero', según models.py
+    email: userData.email || userData.correo || "",
+    telefono: userData.telefono || ""
+  };
+
   try {
-    const res = await apiCall("/usuarios/", "POST", userData);
-    toast(`Cajero ${userData.username} creado exitosamente.`, "success");
+    const res = await apiCall("/usuarios/", "POST", cashierData);
+    alert(`Cajero ${cashierData.username} creado exitosamente.`);
+    
+    // Recargamos la lista de cajeros desde el backend
     data.cashiers = await apiCall("/usuarios/");
     state.activeView = "cashiers";
+    
+    // Actualizamos la vista
+    if (typeof render === "function") render();
     return true;
   } catch (e) {
-    toast(`Error creando cajero: ${e.message}`, "danger");
+    console.error("Error al registrar cajero:", e.message);
+    alert(`Error: ${e.message}`);
     return false;
   }
 }
+
 
 async function createProduct(productData) {
   try {
