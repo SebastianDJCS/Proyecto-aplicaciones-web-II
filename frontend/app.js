@@ -9,46 +9,13 @@ const demoUsers = {
 };
 
 const data = {
-  products: [
-    { id: "p1", code: "7501234567890", name: "Coca Cola 2L", category: "Bebidas", stock: 25, cost: 32, price: 45.5, minStock: 10 },
-    { id: "p2", code: "7501234567891", name: "Pan Blanco", category: "Panadería", stock: 40, cost: 18, price: 28, minStock: 15 },
-    { id: "p3", code: "7501234567892", name: "Leche Entera 1L", category: "Lácteos", stock: 30, cost: 22, price: 32.5, minStock: 12 },
-    { id: "p4", code: "7501234567893", name: "Arroz 1kg", category: "Abarrotes", stock: 50, cost: 15, price: 22, minStock: 18 },
-    { id: "p5", code: "7501234567894", name: "Aceite 1L", category: "Abarrotes", stock: 20, cost: 42, price: 58, minStock: 8 },
-    { id: "p6", code: "7501234567895", name: "Galletas Saladas", category: "Snacks", stock: 3, cost: 12, price: 18.5, minStock: 15 },
-    { id: "p7", code: "7501234567896", name: "Jabón Líquido", category: "Limpieza", stock: 2, cost: 28, price: 42, minStock: 8 },
-    { id: "p8", code: "7501234567897", name: "Papel Higiénico 4pz", category: "Limpieza", stock: 28, cost: 24, price: 35, minStock: 10 },
-  ],
-  suppliers: [
-    { id: "s1", name: "Distribuidora ABC", phone: "555-1234", email: "juan@abc.com", address: "Av. Principal 123", tags: ["Bebidas", "Snacks"] },
-    { id: "s2", name: "Abarrotes del Norte", phone: "555-5678", email: "maria@norte.com", address: "Calle 5 #456", tags: ["Abarrotes", "Lácteos"] },
-    { id: "s3", name: "Productos de Limpieza SA", phone: "555-9012", email: "carlos@limpieza.com", address: "Boulevard 789", tags: ["Limpieza"] },
-  ],
-  orders: [
-    { id: "ORD-001", supplier: "Distribuidora ABC", date: "23/04/2026", total: 1250, status: "Pendiente" },
-    { id: "ORD-002", supplier: "Abarrotes del Norte", date: "20/04/2026", total: 890, status: "Completada" },
-  ],
-  cashiers: [
-    { id: "c1", name: "María García", user: "cajero", contact: "maria@ventapro.com\n555-1234", status: "Activo" },
-    { id: "c2", name: "Juan López", user: "cajero2", contact: "juan@ventapro.com\n555-5678", status: "Activo" },
-    { id: "c3", name: "Ana Martínez", user: "cajero3", contact: "ana@ventapro.com\n555-9012", status: "Inactivo" },
-  ],
-  weeklySales: [
-    { day: "Lun", value: 4000 },
-    { day: "Mar", value: 3000 },
-    { day: "Mié", value: 5000 },
-    { day: "Jue", value: 2800 },
-    { day: "Vie", value: 6900 },
-    { day: "Sáb", value: 8500 },
-    { day: "Dom", value: 4500 },
-  ],
-  topProducts: [
-    { label: "Coca Cola 2L", value: 27, color: "#3b82f6" },
-    { label: "Pan Blanco", value: 23, color: "#8b5cf6" },
-    { label: "Leche Entera", value: 20, color: "#ec4899" },
-    { label: "Arroz 1kg", value: 17, color: "#f59e0b" },
-    { label: "Aceite 1L", value: 13, color: "#10b981" },
-  ],
+  products: [],
+  suppliers: [],
+  categories: [],
+  cashiers: [],
+  orders: [],
+  weeklySales: [],
+  topProducts: [],
 };
 
 const defaultSettings = {
@@ -155,7 +122,9 @@ if (storedSession) {
   state.session = storedSession;
   state.token = storedSession.token;
   state.activeView = storedSession.role === "cashier" ? "point-of-sale" : "dashboard";
-  if (storedSession.token) loadAllData();
+  if (storedSession.token) {
+    loadAllData().then(() => render());
+  }
 }
 
 if ("serviceWorker" in navigator) {
@@ -210,12 +179,10 @@ async function apiCall(endpoint, method = "GET", body = null) {
 
 async function loginBackend(username, password) {
   try {
-    console.log("Intentando login con backend...");
     const res = await apiCall("/auth/token/", "POST", { username, password });
-    console.log("Login exitoso, token:", res.access ? "recibido" : "falta");
     state.token = res.access;
     await loadAllData();
-    console.log("Datos cargados, login completo");
+    render();
     return true;
   } catch (e) {
     console.error("Login backend falló:", e.message);
@@ -224,11 +191,19 @@ async function loginBackend(username, password) {
 }
 
 async function loadAllData() {
+  console.log("Cargando datos del backend...");
   try {
-    data.cashiers = await apiCall("/usuarios/");
-    data.products = await apiCall("/productos/");
-    data.categories = await apiCall("/categorias/");
-    data.suppliers = await apiCall("/proveedores/");
+    const [cashiers, products, categories, suppliers] = await Promise.all([
+      apiCall("/usuarios/"),
+      apiCall("/productos/"),
+      apiCall("/categorias/"),
+      apiCall("/proveedores/")
+    ]);
+    data.cashiers = cashiers;
+    data.products = products;
+    data.categories = categories;
+    data.suppliers = suppliers;
+    console.log("Datos cargados:", data.cashiers.length, "cajeros,", data.products.length, "productos");
   } catch (e) {
     console.error("Error loading data:", e);
   }
