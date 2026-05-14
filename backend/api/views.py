@@ -36,6 +36,11 @@ class UsuarioViewSet(AdministradorOnlyViewSet):
     queryset = Usuario.objects.all().order_by("username")
     serializer_class = UsuarioSerializer
 
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    def me(self, request):
+        serializer = self.get_serializer(request.user)
+        return Response(serializer.data)
+
 
 class ProveedorViewSet(viewsets.ModelViewSet):
     queryset = Proveedor.objects.all().order_by("nombre")

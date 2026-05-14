@@ -28,10 +28,12 @@ class UUIDTimeStampedModel(models.Model):
 class Usuario(AbstractUser):
     ROL_ADMINISTRADOR = "administrador"
     ROL_VENDEDOR = "vendedor"
+    ROL_CAJERO = "cajero"
 
     ROL_CHOICES = [
         (ROL_ADMINISTRADOR, "Administrador"),
         (ROL_VENDEDOR, "Vendedor"),
+        (ROL_CAJERO, "Cajero"),
     ]
 
     rol = models.CharField(max_length=20, choices=ROL_CHOICES, default=ROL_VENDEDOR)

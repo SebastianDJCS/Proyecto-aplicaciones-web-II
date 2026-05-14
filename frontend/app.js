@@ -153,7 +153,9 @@ const storedSession = loadSession();
 if (storedSession) {
   state.authenticated = true;
   state.session = storedSession;
+  state.token = storedSession.token;
   state.activeView = storedSession.role === "cashier" ? "point-of-sale" : "dashboard";
+  if (storedSession.token) loadAllData();
 }
 
 if ("serviceWorker" in navigator) {
@@ -210,6 +212,7 @@ async function loginBackend(username, password) {
   try {
     const res = await apiCall("/auth/token/", "POST", { username, password });
     state.token = res.access;
+    await loadAllData();
     return true;
   } catch (e) {
     toast(`Login fallido: ${e.message}`, "danger");
@@ -217,10 +220,22 @@ async function loginBackend(username, password) {
   }
 }
 
+async function loadAllData() {
+  try {
+    data.cashiers = await apiCall("/usuarios/");
+    data.products = await apiCall("/productos/");
+    data.categories = await apiCall("/categorias/");
+    data.suppliers = await apiCall("/proveedores/");
+  } catch (e) {
+    console.error("Error loading data:", e);
+  }
+}
+
 async function createCashier(userData) {
   try {
     const res = await apiCall("/usuarios/", "POST", userData);
     toast(`Cajero ${userData.username} creado exitosamente.`, "success");
+    data.cashiers = await apiCall("/usuarios/");
     state.activeView = "cashiers";
     return true;
   } catch (e) {
@@ -233,6 +248,7 @@ async function createProduct(productData) {
   try {
     const res = await apiCall("/productos/", "POST", productData);
     toast(`Producto ${productData.nombre} creado exitosamente.`, "success");
+    data.products = await apiCall("/productos/");
     state.activeView = "inventory";
     return true;
   } catch (e) {
@@ -245,6 +261,7 @@ async function createSupplier(supplierData) {
   try {
     const res = await apiCall("/proveedores/", "POST", supplierData);
     toast(`Proveedor ${supplierData.nombre} creado exitosamente.`, "success");
+    data.suppliers = await apiCall("/proveedores/");
     state.activeView = "suppliers";
     return true;
   } catch (e) {
@@ -256,6 +273,7 @@ async function createSupplier(supplierData) {
 async function createSale(saleData) {
   try {
     const res = await apiCall("/ventas/", "POST", saleData);
+    data.products = await apiCall("/productos/");
     toast(`Venta registrada: ${res.numero_factura}`, "success");
     state.cart = [];
     state.cashReceived = "";
@@ -263,6 +281,19 @@ async function createSale(saleData) {
   } catch (e) {
     toast(`Error registrando venta: ${e.message}`, "danger");
     return false;
+  }
+}
+
+async function getOrCreateTurnoCaja() {
+  try {
+    const turnos = await apiCall("/cajeros/");
+    const openTurno = turnos.find(t => t.estado === "abierto");
+    if (openTurno) return openTurno.id;
+    const newTurno = await apiCall("/cajeros/", "POST", { monto_apertura: 0 });
+    return newTurno.id;
+  } catch (e) {
+    console.error("Error getting turno:", e);
+    return null;
   }
 }
 
@@ -510,7 +541,7 @@ function dashboardView() {
 
 function posView() {
   const query = state.search.pos.trim().toLowerCase();
-  const products = data.products.filter((product) => !query || [product.name, product.code, product.category].some((value) => value.toLowerCase().includes(query)));
+  const products = data.products.filter((product) => !query || [product.nombre, product.codigo, product.categoria?.nombre].some((value) => value && value.toLowerCase().includes(query)));
   const totals = cartTotals();
   const cartItems = state.cart.map((item) => ({ ...item, product: data.products.find((p) => p.id === item.id) }));
 
@@ -527,9 +558,9 @@ function posView() {
             <div class="pos-product-grid">
               ${products.map((product) => `
                 <button type="button" class="product-card compact" data-action="add-to-cart" data-id="${product.id}">
-                  <div class="product-title">${product.name}</div>
-                  <div class="product-price">${formatCurrency(product.price)}</div>
-                  <div class="product-stock">Stock: ${product.stock}</div>
+                  <div class="product-title">${product.nombre}</div>
+                  <div class="product-price">${formatCurrency(product.precio_venta)}</div>
+                  <div class="product-stock">Stock: ${product.stock_actual}</div>
                 </button>
               `).join("")}
             </div>
@@ -541,7 +572,7 @@ function posView() {
             <div class="cart-list">
               ${cartItems.length ? cartItems.map((item) => `
                 <div class="cart-item">
-                  <div><strong>${item.product?.name || item.name}</strong><div class="subtle-text">${formatCurrency(item.price)} c/u</div></div>
+                  <div><strong>${item.product?.nombre || item.name}</strong><div class="subtle-text">${formatCurrency(item.price)} c/u</div></div>
                   <div style="text-align:right;">
                     <div class="qty-controls"><button type="button" data-action="decrement-cart" data-id="${item.id}">−</button><strong>${item.qty}</strong><button type="button" data-action="increment-cart" data-id="${item.id}">+</button></div>
                     <div style="margin-top:8px;">${formatCurrency(item.qty * item.price)}</div>
@@ -581,8 +612,8 @@ function posView() {
 function inventoryView() {
   const query = state.search.inventory.trim().toLowerCase();
   const category = state.search.category;
-  const categories = ["all", ...new Set(data.products.map((item) => item.category))];
-  const rows = data.products.filter((product) => (!query || [product.name, product.code].some((value) => value.toLowerCase().includes(query))) && (category === "all" || product.category === category));
+  const categories = ["all", ...new Set(data.products.map((item) => item.categoria?.nombre || "Sin categoría"))];
+  const rows = data.products.filter((product) => (!query || [product.nombre, product.codigo].some((value) => value && value.toLowerCase().includes(query))) && (category === "all" || product.categoria?.nombre === category));
 
   return `
     <section class="view inventory-view">
@@ -599,17 +630,19 @@ function inventoryView() {
           <table>
             <thead><tr><th>Producto</th><th>Categoría</th><th>Stock</th><th>Costo</th><th>Precio</th><th>Margen</th><th>Acciones</th></tr></thead>
             <tbody>
-              ${rows.map((product) => `
+              ${rows.map((product) => {
+                const margen = product.costo > 0 ? ((product.precio_venta - product.costo) / product.costo * 100).toFixed(1) : 0;
+                return `
                 <tr>
-                  <td><strong>${product.name}</strong><br><span class="subtle-text">${product.code}</span></td>
-                  <td><span class="chip neutral">${product.category}</span></td>
-                  <td><span class="chip ${product.stock <= product.minStock ? "danger" : "success"}">${product.stock}</span></td>
-                  <td>${formatCurrency(product.cost)}</td>
-                  <td>${formatCurrency(product.price)}</td>
-                  <td><span class="chip success">+${(((product.price - product.cost) / product.cost) * 100).toFixed(1)}%</span></td>
+                  <td><strong>${product.nombre}</strong><br><span class="subtle-text">${product.codigo}</span></td>
+                  <td><span class="chip neutral">${product.categoria?.nombre || "Sin categoría"}</span></td>
+                  <td><span class="chip ${product.stock_actual <= product.stock_minimo ? "danger" : "success"}">${product.stock_actual}</span></td>
+                  <td>${formatCurrency(product.costo)}</td>
+                  <td>${formatCurrency(product.precio_venta)}</td>
+                  <td><span class="chip success">+${margen}%</span></td>
                   <td><div class="action-icons"><button class="icon-btn" type="button" data-action="edit-product" data-id="${product.id}">✎</button><button class="icon-btn danger" type="button" data-action="delete-product" data-id="${product.id}">🗑</button></div></td>
                 </tr>
-              `).join("")}
+              `}).join("")}
             </tbody>
           </table>
         </div>
@@ -620,7 +653,7 @@ function inventoryView() {
 
 function suppliersView() {
   const query = state.search.supplier.trim().toLowerCase();
-  const suppliers = data.suppliers.filter((supplier) => !query || [supplier.name, supplier.phone, supplier.email, supplier.address, ...supplier.tags].some((value) => value.toLowerCase().includes(query)));
+  const suppliers = data.suppliers.filter((supplier) => !query || [supplier.nombre, supplier.telefono, supplier.correo, supplier.direccion, supplier.contacto].some((value) => value && value.toLowerCase().includes(query)));
 
   return `
     <section class="view suppliers-view">
@@ -633,27 +666,16 @@ function suppliersView() {
         <div class="supplier-cards" style="margin-top:16px;">
           ${suppliers.map((supplier) => `
             <article class="panel supplier-card">
-              <div class="supplier-card-head"><div><h3>${supplier.name}</h3></div><div class="action-icons"><button class="icon-btn" type="button" data-action="edit-supplier" data-id="${supplier.id}">✎</button><button class="icon-btn danger" type="button" data-action="delete-supplier" data-id="${supplier.id}">🗑</button></div></div>
-              <div class="supplier-meta"><div>☎ ${supplier.phone}</div><div>✉ ${supplier.email}</div><div>⌂ ${supplier.address}</div></div>
-              <div><div class="subtle-text" style="margin-bottom:8px;">Productos suministrados:</div><div class="tag-list">${supplier.tags.map((tag) => `<span class="tag">${tag}</span>`).join("")}</div></div>
+              <div class="supplier-card-head"><div><h3>${supplier.nombre}</h3></div><div class="action-icons"><button class="icon-btn" type="button" data-action="edit-supplier" data-id="${supplier.id}">✎</button><button class="icon-btn danger" type="button" data-action="delete-supplier" data-id="${supplier.id}">🗑</button></div></div>
+              <div class="supplier-meta">
+                <div>☎ ${supplier.telefono || "Sin teléfono"}</div>
+                <div>✉ ${supplier.correo || "Sin correo"}</div>
+                <div>⌂ ${supplier.direccion || "Sin dirección"}</div>
+              </div>
+              ${supplier.contacto ? `<div><div class="subtle-text" style="margin-bottom:8px;">Contacto:</div><div>${supplier.contacto}</div></div>` : ""}
               <button class="button ghost" type="button" data-action="new-order" data-id="${supplier.id}">Nueva Orden de Compra</button>
             </article>
           `).join("")}
-        </div>
-      </section>
-      <section class="panel recent-orders">
-        <h3>Órdenes de Compra Recientes</h3>
-        <div class="table-responsive" style="margin-top:10px;">
-          <table>
-            <thead><tr><th>Orden #</th><th>Proveedor</th><th>Fecha</th><th>Total</th><th>Estado</th><th>Acciones</th></tr></thead>
-            <tbody>
-              ${data.orders.map((order) => `
-                <tr>
-                  <td>#${order.id}</td><td>${order.supplier}</td><td>${order.date}</td><td>${formatCurrency(order.total)}</td><td><span class="chip ${order.status === "Pendiente" ? "warning" : "success"}">${order.status}</span></td><td><button class="button secondary" type="button" data-action="view-order" data-id="${order.id}">Ver Detalles</button></td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
         </div>
       </section>
     </section>
@@ -662,9 +684,9 @@ function suppliersView() {
 
 function cashiersView() {
   const query = state.search.cashier.trim().toLowerCase();
-  const cashiers = data.cashiers.filter((cashier) => !query || [cashier.name, cashier.user, cashier.contact].some((value) => value.toLowerCase().includes(query)));
+  const cashiers = data.cashiers.filter((c) => !query || [c.first_name, c.last_name, c.username, c.telefono].some((v) => v && v.toLowerCase().includes(query)));
   const total = data.cashiers.length;
-  const active = data.cashiers.filter((item) => item.status === "Activo").length;
+  const active = data.cashiers.filter((c) => c.is_active).length;
 
   return `
     <section class="view cashiers-view">
@@ -676,14 +698,15 @@ function cashiersView() {
         <div class="toolbar" style="margin-bottom:14px;"><div class="search-wrap"><span class="search-icon">${iconSearch()}</span><input class="search-input" data-search="cashier" type="text" placeholder="Buscar cajeros..." value="${escapeAttr(state.search.cashier)}" /></div></div>
         <div class="table-responsive">
           <table>
-            <thead><tr><th>Cajero</th><th>Usuario</th><th>Contacto</th><th>Estado</th><th>Acciones</th></tr></thead>
+            <thead><tr><th>Cajero</th><th>Usuario</th><th>Contacto</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead>
             <tbody>
               ${cashiers.map((cashier) => `
                 <tr>
-                  <td><strong>${cashier.name}</strong></td>
-                  <td><span class="chip neutral">${cashier.user}</span></td>
-                  <td>${cashier.contact.split("\n").join("<br>")}</td>
-                  <td><span class="chip ${cashier.status === "Activo" ? "success" : "danger"}">${cashier.status}</span></td>
+                  <td><strong>${cashier.first_name} ${cashier.last_name}</strong></td>
+                  <td><span class="chip neutral">${cashier.username}</span></td>
+                  <td>${cashier.telefono || "Sin teléfono"}</td>
+                  <td><span class="chip">${cashier.rol}</span></td>
+                  <td><span class="chip ${cashier.is_active ? "success" : "danger"}">${cashier.is_active ? "Activo" : "Inactivo"}</span></td>
                   <td><div class="action-icons"><button class="icon-btn" type="button" data-action="edit-cashier" data-id="${cashier.id}">✎</button><button class="icon-btn danger" type="button" data-action="delete-cashier" data-id="${cashier.id}">🗑</button></div></td>
                 </tr>
               `).join("")}
@@ -879,9 +902,11 @@ function handleSubmit(event) {
     const userData = {
       username: formData.get("username"),
       first_name: formData.get("first_name"),
+      last_name: formData.get("last_name") || "",
       password: formData.get("password"),
       email: formData.get("email") || "",
-      rol: "vendedor",
+      telefono: formData.get("telefono") || "",
+      rol: "cajero",
     };
     createCashier(userData).then(() => closeModal());
     return;
@@ -950,13 +975,16 @@ function handleChange(event) {
 
 function login(username, password) {
   // First try backend API if available
-  loginBackend(username, password).then((backendSuccess) => {
+  loginBackend(username, password).then(async (backendSuccess) => {
     if (backendSuccess) {
       state.authenticated = true;
-      state.session = { username, name: username, role: "admin", initials: username.substring(0, 1).toUpperCase() };
-      state.activeView = "dashboard";
+      // Obtener info del usuario logueado
+      const me = await apiCall("/usuarios/me/").catch(() => null);
+      const role = me?.rol === "administrador" ? "admin" : me?.rol === "cajero" ? "cashier" : "cashier";
+      state.session = { username, name: me ? `${me.first_name} ${me.last_name}` : username, role, initials: username.substring(0, 1).toUpperCase() };
+      state.activeView = role === "cashier" ? "point-of-sale" : "dashboard";
       saveSession({ ...state.session, token: state.token });
-      toast(`Bienvenido, ${username}.`, "success");
+      toast(`Bienvenido, ${state.session.name}.`, "success");
       render();
       return;
     }
@@ -992,12 +1020,12 @@ function addToCart(productId) {
   if (!product) return;
   const existing = state.cart.find((item) => item.id === productId);
   const qty = existing ? existing.qty : 0;
-  if (qty >= product.stock) {
-    toast(`No hay más stock disponible para ${product.name}.`, "warning");
+  if (qty >= product.stock_actual) {
+    toast(`No hay más stock disponible para ${product.nombre}.`, "warning");
     return;
   }
-  if (existing) existing.qty += 1; else state.cart.push({ id: product.id, name: product.name, price: product.price, qty: 1 });
-  toast(`${product.name} agregado al carrito.`, "success");
+  if (existing) existing.qty += 1; else state.cart.push({ id: product.id, name: product.nombre, price: product.precio_venta, qty: 1 });
+  toast(`${product.nombre} agregado al carrito.`, "success");
   render();
 }
 
@@ -1008,8 +1036,8 @@ function changeCartQty(productId, delta) {
   const next = item.qty + delta;
   if (next <= 0) {
     state.cart = state.cart.filter((entry) => entry.id !== productId);
-  } else if (next > product.stock) {
-    toast(`No puedes superar el stock actual de ${product.name}.`, "warning");
+  } else if (next > product.stock_actual) {
+    toast(`No puedes superar el stock actual de ${product.nombre}.`, "warning");
     return;
   } else {
     item.qty = next;
@@ -1029,19 +1057,28 @@ function canFinalizeSale() {
   return Number.isFinite(cash) && cash >= cartTotals().total;
 }
 
-function finalizeSale() {
+async function finalizeSale() {
   if (!canFinalizeSale()) {
     toast("Completa el carrito y el efectivo recibido para finalizar.", "warning");
     return;
   }
-  state.cart.forEach((item) => {
-    const product = data.products.find((entry) => entry.id === item.id);
-    if (product) product.stock = Math.max(0, product.stock - item.qty);
-  });
-  state.cart = [];
-  state.cashReceived = "";
-  toast("Venta finalizada correctamente.", "success");
-  render();
+  const turnoId = await getOrCreateTurnoCaja();
+  if (!turnoId) {
+    toast("Error: No se pudo abrir un turno de caja.", "danger");
+    return;
+  }
+  const saleData = {
+    turno_caja: turnoId,
+    medio_pago: state.paymentMethod === "efectivo" ? "efectivo" : state.paymentMethod === "tarjeta" ? "tarjeta" : "transferencia",
+    monto_pagado: parseFloat(state.cashReceived) || cartTotals().total,
+    detalles: state.cart.map(item => ({
+      producto: item.id,
+      cantidad: item.qty,
+      precio_unitario: item.price
+    }))
+  };
+  const success = await createSale(saleData);
+  if (success) render();
 }
 
 function restockProduct(productId) {
@@ -1092,8 +1129,12 @@ function formNewCashier() {
       </div>
       <form id="form-new-cashier" class="modal-form">
         <div class="form-group">
-          <label>Nombre completo</label>
+          <label>Nombre</label>
           <input class="input" name="first_name" type="text" required />
+        </div>
+        <div class="form-group">
+          <label>Apellido</label>
+          <input class="input" name="last_name" type="text" />
         </div>
         <div class="form-group">
           <label>Usuario</label>
@@ -1106,6 +1147,10 @@ function formNewCashier() {
         <div class="form-group">
           <label>Email</label>
           <input class="input" name="email" type="email" />
+        </div>
+        <div class="form-group">
+          <label>Teléfono</label>
+          <input class="input" name="telefono" type="tel" />
         </div>
         <div class="form-actions">
           <button class="button" type="submit">Crear Cajero</button>
