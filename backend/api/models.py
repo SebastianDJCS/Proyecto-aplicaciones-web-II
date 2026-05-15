@@ -63,24 +63,22 @@ class Usuario(AbstractUser):
 
     def __str__(self):
         return f"{self.username} - {self.rol}"
-    rol = models.CharField(max_length=20, choices=ROL_CHOICES, default=ROL_VENDEDOR)
-    telefono = models.CharField(max_length=30, blank=True)
 
     class Meta(AbstractUser.Meta):
         verbose_name = "usuario"
         verbose_name_plural = "usuarios"
 
     def save(self, *args, **kwargs):
-        self.is_staff = self.is_superuser or self.rol == self.ROL_ADMINISTRADOR
+        self.is_staff = self.is_superuser or self.rol == ROL_ADMINISTRADOR
         super().save(*args, **kwargs)
 
     @property
     def es_administrador(self) -> bool:
-        return self.rol == self.ROL_ADMINISTRADOR
+        return self.rol == ROL_ADMINISTRADOR
 
     @property
     def es_vendedor(self) -> bool:
-        return self.rol == self.ROL_VENDEDOR
+        return self.rol == ROL_VENDEDOR
 
 
 class Proveedor(UUIDTimeStampedModel):

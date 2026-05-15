@@ -1,7 +1,7 @@
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
-from .models import Producto, Proveedor, Usuario
+from .models import Producto, Proveedor, Usuario, ROL_ADMINISTRADOR
 
 
 class ProductoModelTests(TestCase):
@@ -25,6 +25,6 @@ class UsuarioModelTests(TestCase):
         usuario = Usuario.objects.create_user(
             username="admin",
             password="secret123",
-            rol=Usuario.ROL_ADMINISTRADOR,
+            rol=ROL_ADMINISTRADOR,
         )
         self.assertTrue(usuario.is_staff)

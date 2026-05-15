@@ -9,7 +9,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from .models import Compra, Categoria, DetalleCompra, ListaPrecio, ListaPrecioItem, Producto, Proveedor, TurnoCaja, Usuario, Venta, EstadoSync
+from .models import Compra, Categoria, DetalleCompra, ListaPrecio, ListaPrecioItem, Producto, Proveedor, TurnoCaja, Usuario, Venta, EstadoSync, ROL_ADMINISTRADOR
 from .permissions import IsAdministrador, IsAdministradorOReadOnly, IsAdministradorOVendedor
 from .serializers import (
     CompraSerializer,
@@ -83,7 +83,7 @@ class TurnoCajaViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = TurnoCaja.objects.select_related("usuario").all().order_by("-fecha_apertura")
         user = self.request.user
-        if user.is_authenticated and getattr(user, "rol", None) != Usuario.ROL_ADMINISTRADOR:
+        if user.is_authenticated and getattr(user, "rol", None) != ROL_ADMINISTRADOR:
             queryset = queryset.filter(usuario=user)
         return queryset
 
@@ -98,7 +98,7 @@ class TurnoCajaViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def cerrar(self, request, pk=None):
         turno = self.get_object()
-        if request.user.rol != Usuario.ROL_ADMINISTRADOR and turno.usuario_id != request.user.id:
+        if request.user.rol != ROL_ADMINISTRADOR and turno.usuario_id != request.user.id:
             return Response({"detail": "No puedes cerrar un turno ajeno."}, status=status.HTTP_403_FORBIDDEN)
 
         serializer = TurnoCajaCierreSerializer(data=request.data)
@@ -119,14 +119,14 @@ class VentaViewSet(viewsets.ModelViewSet):
             "detalles__producto"
         )
         user = self.request.user
-        if user.is_authenticated and getattr(user, "rol", None) != Usuario.ROL_ADMINISTRADOR:
+        if user.is_authenticated and getattr(user, "rol", None) != ROL_ADMINISTRADOR:
             queryset = queryset.filter(vendedor=user)
         return queryset.order_by("-fecha_venta")
 
     @action(detail=True, methods=["post"])
     def anular(self, request, pk=None):
         venta = self.get_object()
-        if request.user.rol != Usuario.ROL_ADMINISTRADOR and venta.vendedor_id != request.user.id:
+        if request.user.rol != ROL_ADMINISTRADOR and venta.vendedor_id != request.user.id:
             return Response({"detail": "No puedes anular una venta ajena."}, status=status.HTTP_403_FORBIDDEN)
 
         motivo = request.data.get("motivo", "")
@@ -157,7 +157,7 @@ class DashboardViewSet(viewsets.ViewSet):
         base_compras = Compra.objects.all()
         base_turnos = TurnoCaja.objects.all()
 
-        if request.user.rol != Usuario.ROL_ADMINISTRADOR:
+        if request.user.rol != ROL_ADMINISTRADOR:
             base_ventas = base_ventas.filter(vendedor=request.user)
             base_compras = base_compras.filter(usuario=request.user)
             base_turnos = base_turnos.filter(usuario=request.user)
@@ -218,7 +218,7 @@ class SyncViewSet(viewsets.ViewSet):
         if last_sync:
             queryset = queryset.filter(updated_at__gt=last_sync)
         user = self.request.user
-        if getattr(user, "rol", None) != Usuario.ROL_ADMINISTRADOR and model in {Venta, Compra, TurnoCaja}:
+        if getattr(user, "rol", None) != ROL_ADMINISTRADOR and model in {Venta, Compra, TurnoCaja}:
             if model is Venta:
                 queryset = queryset.filter(vendedor=user)
             elif model is Compra:

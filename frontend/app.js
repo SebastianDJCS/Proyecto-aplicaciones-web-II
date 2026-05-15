@@ -4,7 +4,7 @@ const STORAGE_KEYS = {
   appVersion: "ventapro-app-version",
 };
 
-const APP_VERSION = "2026-05-14-2";
+const APP_VERSION = "2026-05-14-3";
 
 const demoUsers = {
   admin: { username: "admin", password: "admin", name: "Administrador", role: "admin", initials: "A" },
@@ -19,6 +19,7 @@ const data = {
   orders: [],
   weeklySales: [],
   topProducts: [],
+  dashboard: null,
 };
 
 const defaultSettings = {
@@ -120,6 +121,7 @@ const state = {
 };
 
 let liveSyncTimer = null;
+let loadAllDataInProgress = false;
 
 const root = document.getElementById("root");
 
@@ -203,7 +205,7 @@ function startLiveSync() {
     } catch (error) {
       console.error("Live sync failed:", error);
     }
-  }, 10000);
+  }, 30000);
 }
 
 function stopLiveSync() {
@@ -308,6 +310,11 @@ async function refreshToken() {
 }
 
 async function loadAllData() {
+  if (loadAllDataInProgress) {
+    console.log("loadAllData ya en progreso, saltando...");
+    return;
+  }
+  loadAllDataInProgress = true;
   console.log("Cargando datos del backend...");
   try {
     const [cashiers, products, categories, suppliers] = await Promise.allSettled([
@@ -327,14 +334,30 @@ async function loadAllData() {
       console.warn("Algunos datos no se pudieron cargar:", failed.map((item) => item.reason?.message || String(item.reason)));
     }
 
+    await loadDashboardData();
+
     console.log("Datos cargados:", data.cashiers.length, "cajeros,", data.products.length, "productos");
+    loadAllDataInProgress = false;
   } catch (e) {
     console.error("Error loading data:", e);
+    loadAllDataInProgress = false;
     throw e;
   }
 }
 
+async function loadDashboardData() {
+  try {
+    data.dashboard = await apiCall("/dashboard/");
+  } catch (e) {
+    console.error("Error loading dashboard:", e);
+    data.dashboard = null;
+  }
+}
+
 async function createCashier(userData) {
+  // Detener liveSync temporalmente para evitar conflictos
+  stopLiveSync();
+
   // Transformamos el objeto que recibe del formulario para que encaje 
   // exactamente con lo que el Serializer de Django exige:
   const cashierData = {
@@ -355,53 +378,65 @@ async function createCashier(userData) {
     data.cashiers = await apiCall("/usuarios/");
     state.activeView = "cashiers";
     
-    // Actualizamos la vista
-    if (typeof render === "function") render();
+    // Reiniciar liveSync
+    startLiveSync();
     return true;
   } catch (e) {
     console.error("Error al registrar cajero:", e.message);
     alert(`Error: ${e.message}`);
+    // Reiniciar liveSync anche en caso de error
+    startLiveSync();
     return false;
   }
 }
 
 
 async function createProduct(productData) {
+  stopLiveSync();
   try {
     const res = await apiCall("/productos/", "POST", productData);
     toast(`Producto ${productData.nombre} creado exitosamente.`, "success");
     data.products = await apiCall("/productos/");
     state.activeView = "inventory";
+    startLiveSync();
     return true;
   } catch (e) {
     toast(`Error creando producto: ${e.message}`, "danger");
+    startLiveSync();
     return false;
   }
 }
 
 async function createSupplier(supplierData) {
+  stopLiveSync();
   try {
     const res = await apiCall("/proveedores/", "POST", supplierData);
     toast(`Proveedor ${supplierData.nombre} creado exitosamente.`, "success");
     data.suppliers = await apiCall("/proveedores/");
     state.activeView = "suppliers";
+    startLiveSync();
     return true;
   } catch (e) {
     toast(`Error creando proveedor: ${e.message}`, "danger");
+    startLiveSync();
     return false;
   }
 }
 
 async function createSale(saleData) {
+  stopLiveSync();
   try {
     const res = await apiCall("/ventas/", "POST", saleData);
     await loadAllData();
     toast(`Venta registrada: ${res.numero_factura}`, "success");
+    generateReceipt(res, state.cart);
     state.cart = [];
     state.cashReceived = "";
+    startLiveSync();
     return true;
   } catch (e) {
     toast(`Error registrando venta: ${e.message}`, "danger");
+    startLiveSync();
     return false;
   }
 }
@@ -583,11 +618,16 @@ function renderView(viewId) {
 }
 
 function dashboardView() {
+  const d = data.dashboard || {};
+  const ventasHoy = Number(d.total_ventas_hoy) || 0;
+  const numVentas = Number(d.ventas_hoy) || 0;
+  const ticketPromedio = numVentas > 0 ? Math.round(ventasHoy / numVentas) : 0;
+
   const stats = [
-    { label: "Ventas Hoy", value: 8390, trend: "+12.5% vs ayer", icon: iconMoney(), tone: "" },
-    { label: "Productos Vendidos", value: 58, trend: "+8.2% vs ayer", icon: iconCube(), tone: "purple" },
-    { label: "Ticket Promedio", value: 145, trend: "+5.1% vs ayer", icon: iconMoney(), tone: "green" },
-    { label: "Alertas Stock", value: 3, trend: "Productos con stock bajo", icon: iconWarning(), tone: "red" },
+    { label: "Ventas Hoy", value: ventasHoy, trend: `${numVentas} facturas`, icon: iconMoney(), tone: "" },
+    { label: "Facturas", value: numVentas, trend: "Ventas realizadas", icon: iconCube(), tone: "purple" },
+    { label: "Ticket Promedio", value: ticketPromedio, trend: "Por factura", icon: iconMoney(), tone: "green" },
+    { label: "Alertas Stock", value: d.productos_stock_bajo || 0, trend: "Productos con stock bajo", icon: iconWarning(), tone: "red" },
   ];
   const lowStock = data.products.filter((item) => Number(item.stock_actual) <= Number(item.stock_minimo));
 
@@ -1046,7 +1086,7 @@ function handleSubmit(event) {
       password: formData.get("password"),
       email: formData.get("email") || "",
       telefono: formData.get("telefono") || "",
-      rol: "cajero",
+      rol: "vendedor",
     };
     createCashier(userData).then(() => closeModal());
     return;
@@ -1260,11 +1300,15 @@ async function editProduct(productId) {
 async function deleteProduct(productId) {
   const product = data.products.find((item) => item.id === productId);
   if (!product) return;
-  if (!window.confirm(`Eliminar producto ${product.nombre}?`)) return;
-  await apiCall(`/productos/${productId}/`, "DELETE");
-  await loadAllData();
-  toast("Producto eliminado.", "success");
-  render();
+  if (!window.confirm(`¿Desactivar producto ${product.nombre}?`)) return;
+  try {
+    await apiCall(`/productos/${productId}/`, "PATCH", { activo: false });
+    await loadAllData();
+    toast("Producto desactivado.", "success");
+    render();
+  } catch (e) {
+    toast(`Error: ${e.message}`, "danger");
+  }
 }
 
 async function editSupplier(supplierId) {
@@ -1369,6 +1413,7 @@ function actionMessage(action) {
 
 // === MODAL FORMS ===
 function showModal(formHtml) {
+  stopLiveSync();
   state.showModal = true;
   state.modalForm = formHtml;
   render();
@@ -1378,6 +1423,7 @@ function closeModal() {
   state.showModal = false;
   state.modalForm = null;
   render();
+  startLiveSync();
 }
 
 function formNewCashier() {
@@ -1499,6 +1545,145 @@ function toast(message, tone = "") {
   node.textContent = message;
   host.appendChild(node);
   window.setTimeout(() => node.remove(), 2600);
+}
+
+function generateReceipt(venta, cartItems) {
+  const items = cartItems.map(item => {
+    const product = data.products.find(p => p.id === item.id);
+    return {
+      nombre: product?.nombre || item.name,
+      cantidad: item.qty,
+      precio: item.price,
+      subtotal: item.qty * item.price
+    };
+  });
+
+  const subtotal = items.reduce((sum, item) => sum + item.subtotal, 0);
+  const total = subtotal;
+  const cambio = Number(state.cashReceived) - total;
+
+  const receiptHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>Recibo - ${venta.numero_factura}</title>
+      <style>
+        @import url('https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&display=swap');
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Courier Prime', 'Courier New', monospace; font-size: 12px; width: 80mm; margin: 0 auto; padding: 10px; }
+        .header { text-align: center; margin-bottom: 15px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
+        .header h1 { font-size: 18px; font-weight: bold; margin-bottom: 5px; }
+        .header p { font-size: 10px; margin: 2px 0; }
+        .info { margin-bottom: 15px; font-size: 10px; }
+        .info-row { display: flex; justify-content: space-between; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
+        th, td { text-align: left; padding: 4px 0; }
+        th { border-bottom: 1px dashed #000; }
+        .text-right { text-align: right; }
+        .text-center { text-align: center; }
+        .totals { border-top: 1px dashed #000; padding-top: 10px; }
+        .totals .row { display: flex; justify-content: space-between; margin: 5px 0; }
+        .totals .total { font-weight: bold; font-size: 14px; }
+        .footer { text-align: center; margin-top: 20px; border-top: 1px dashed #000; padding-top: 10px; }
+        .footer p { font-size: 10px; margin: 3px 0; }
+        .payment-info { background: #f5f5f5; padding: 10px; margin: 10px 0; border-radius: 4px; }
+        @media print {
+          body { width: auto; margin: 0; }
+          @page { margin: 0; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>VENTAPRO</h1>
+        <p>Sistema de Ventas e Inventario</p>
+        <p>Tel: 0000-0000</p>
+      </div>
+      <div class="info">
+        <div class="info-row">
+          <span>Factura:</span>
+          <span>${venta.numero_factura || 'N/A'}</span>
+        </div>
+        <div class="info-row">
+          <span>Fecha:</span>
+          <span>${new Date().toLocaleString('es-ES')}</span>
+        </div>
+        <div class="info-row">
+          <span>Cajero:</span>
+          <span>${state.session?.name || 'Vendedor'}</span>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Producto</th>
+            <th class="text-right">Cant</th>
+            <th class="text-right">P.Unit</th>
+            <th class="text-right">Subtotal</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items.map(item => `
+            <tr>
+              <td>${item.nombre}</td>
+              <td class="text-right">${item.cantidad}</td>
+              <td class="text-right">${formatCurrency(item.precio)}</td>
+              <td class="text-right">${formatCurrency(item.subtotal)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      <div class="totals">
+        <div class="row">
+          <span>Subtotal:</span>
+          <span>${formatCurrency(subtotal)}</span>
+        </div>
+        <div class="row">
+          <span>IVA (0%):</span>
+          <span>$0.00</span>
+        </div>
+        <div class="row total">
+          <span>TOTAL:</span>
+          <span>${formatCurrency(total)}</span>
+        </div>
+      </div>
+      <div class="payment-info">
+        <div class="info-row">
+          <span>Método de pago:</span>
+          <span>${venta.medio_pago?.toUpperCase() || state.paymentMethod.toUpperCase()}</span>
+        </div>
+        <div class="info-row">
+          <span>Monto recibido:</span>
+          <span>${formatCurrency(Number(venta.monto_pagado) || state.cashReceived || total)}</span>
+        </div>
+        ${cambio > 0 ? `
+        <div class="info-row">
+          <span>Cambio:</span>
+          <span>${formatCurrency(cambio)}</span>
+        </div>
+        ` : ''}
+      </div>
+      <div class="footer">
+        <p>Gracias por su compra</p>
+        <p>Vea nuestros productos en nuestra tienda</p>
+        <p>¡Vuelva pronto!</p>
+      </div>
+      <script>
+        window.onload = function() {
+          window.print();
+          window.onafterprint = function() { window.close(); };
+        };
+      </script>
+    </body>
+    </html>
+  `;
+
+  const printWindow = window.open('', '_blank', 'width=400,height=600');
+  if (printWindow) {
+    printWindow.document.write(receiptHtml);
+    printWindow.document.close();
+  }
 }
 
 function updateSyncBadge() {
