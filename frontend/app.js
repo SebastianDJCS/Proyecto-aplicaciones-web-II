@@ -4,7 +4,7 @@ const STORAGE_KEYS = {
   appVersion: "ventapro-app-version",
 };
 
-const APP_VERSION = "2026-05-14-3";
+const APP_VERSION = "2026-05-14-4";
 
 const demoUsers = {
   admin: { username: "admin", password: "admin", name: "Administrador", role: "admin", initials: "A" },
@@ -122,6 +122,7 @@ const state = {
 
 let liveSyncTimer = null;
 let loadAllDataInProgress = false;
+let renderTimeout = null;
 
 const root = document.getElementById("root");
 
@@ -170,6 +171,7 @@ async function ensureFreshApp() {
       const keys = await caches.keys();
       await Promise.all(keys.map((key) => caches.delete(key)));
     }
+    window.location.reload();
   } catch (error) {
     console.warn("No se pudo limpiar el estado antiguo del navegador:", error);
   }
@@ -484,6 +486,10 @@ function getClockLabel() {
 }
 
 function render() {
+  const activeElement = document.activeElement;
+  const activeId = activeElement?.id || activeElement?.dataset?.search;
+  const activeValue = activeElement?.value || "";
+
   applySettings();
   if (!state.authenticated) {
     root.innerHTML = loginView();
@@ -499,6 +505,19 @@ function render() {
   applySettings();
   updateSyncBadge();
   wireCharts();
+
+  if (activeId && activeElement?.matches && 
+      (activeElement.matches("[data-search]") || activeElement.matches(".search-input"))) {
+    const input = document.querySelector(`[data-search="${activeId}"]`) || document.getElementById(activeId);
+    if (input && input.value === activeValue) {
+      const selStart = activeElement?.selectionStart;
+      const selEnd = activeElement?.selectionEnd;
+      input.focus();
+      if (selStart !== undefined && selEnd !== undefined) {
+        input.setSelectionRange(selStart, selEnd);
+      }
+    }
+  }
 }
 
 function loginView() {
@@ -1092,7 +1111,7 @@ function handleSubmit(event) {
       password: formData.get("password"),
       email: formData.get("email") || "",
       telefono: formData.get("telefono") || "",
-      rol: "vendedor",
+      rol: formData.get("rol") || "vendedor",
     };
     createCashier(userData).then(() => closeModal());
     return;
@@ -1128,21 +1147,26 @@ function handleSubmit(event) {
 
 function handleInput(event) {
   const { target } = event;
+  const isSearchInput = target.matches("[data-search]") || target.matches(".search-input");
+  const isPaymentField = target.matches("[data-payment-field='cash']");
+  
+  if (!isSearchInput && !isPaymentField) return;
+  
   if (target.matches("[data-search='pos']")) {
     state.search.pos = target.value;
-    render();
   } else if (target.matches("[data-search='inventory']")) {
     state.search.inventory = target.value;
-    render();
   } else if (target.matches("[data-search='supplier']")) {
     state.search.supplier = target.value;
-    render();
   } else if (target.matches("[data-search='cashier']")) {
     state.search.cashier = target.value;
-    render();
-  } else if (target.matches("[data-payment-field='cash']")) {
+  } else if (isPaymentField) {
     state.cashReceived = target.value;
+    return;
   }
+
+  clearTimeout(renderTimeout);
+  renderTimeout = setTimeout(() => render(), 150);
 }
 
 function handleChange(event) {
@@ -1354,7 +1378,7 @@ async function deleteSupplier(supplierId) {
 }
 
 async function editCashier(cashierId) {
-  const cashier = data.cashiers.find((item) => item.id === cashierId);
+  const cashier = data.cashiers.find((item) => String(item.id) === String(cashierId));
   if (!cashier) return;
 
   const firstName = promptIfCancelled("Nombre", cashier.first_name || "");
@@ -1367,26 +1391,36 @@ async function editCashier(cashierId) {
   if (email === null) return;
   const telefono = promptIfCancelled("Teléfono", cashier.telefono || "");
   if (telefono === null) return;
+  const rol = promptIfCancelled("Rol (vendedor/administrador)", cashier.rol || "vendedor");
+  if (rol === null) return;
   const password = promptIfCancelled("Nueva contraseña (dejar vacía para no cambiar)", "");
   if (password === null) return;
 
-  const payload = { first_name: firstName, last_name: lastName, username, email, telefono };
+  const payload = { first_name: firstName, last_name: lastName, username, email, telefono, rol };
   if (password) payload.password = password;
 
-  await apiCall(`/usuarios/${cashierId}/`, "PATCH", payload);
-  await loadAllData();
-  toast("Cajero actualizado.", "success");
-  render();
+  try {
+    await apiCall(`/usuarios/${cashierId}/`, "PATCH", payload);
+    await loadAllData();
+    toast("Cajero actualizado.", "success");
+    render();
+  } catch (e) {
+    toast(`Error: ${e.message}`, "danger");
+  }
 }
 
 async function deleteCashier(cashierId) {
-  const cashier = data.cashiers.find((item) => item.id === cashierId);
+  const cashier = data.cashiers.find((item) => String(item.id) === String(cashierId));
   if (!cashier) return;
   if (!window.confirm(`Eliminar cajero ${cashier.username}?`)) return;
-  await apiCall(`/usuarios/${cashierId}/`, "DELETE");
-  await loadAllData();
-  toast("Cajero eliminado.", "success");
-  render();
+  try {
+    await apiCall(`/usuarios/${cashierId}/`, "DELETE");
+    await loadAllData();
+    toast("Cajero eliminado.", "success");
+    render();
+  } catch (e) {
+    toast(`Error: ${e.message}`, "danger");
+  }
 }
 
 function restockProduct(productId) {
@@ -1461,6 +1495,13 @@ function formNewCashier() {
         <div class="form-group">
           <label>Teléfono</label>
           <input class="input" name="telefono" type="tel" />
+        </div>
+        <div class="form-group">
+          <label>Rol</label>
+          <select class="input" name="rol" required>
+            <option value="vendedor">Vendedor/Cajero</option>
+            <option value="administrador">Administrador</option>
+          </select>
         </div>
         <div class="form-actions">
           <button class="button" type="submit">Crear Cajero</button>
