@@ -1070,14 +1070,20 @@ function handleClick(event) {
 }
 
 function handleSubmit(event) {
-  if (event.target.id === "login-form") {
+  // Evitar recarga accidental por envío de formularios
+  try {
     event.preventDefault();
+  } catch (e) {
+    /* ignore */
+  }
+  console.debug("handleSubmit -> target.id:", event.target && event.target.id);
+
+  if (event.target.id === "login-form") {
     login(event.target.username.value.trim(), event.target.password.value);
     return;
   }
 
   if (event.target.id === "form-new-cashier") {
-    event.preventDefault();
     const formData = new FormData(event.target);
     const userData = {
       username: formData.get("username"),
@@ -1093,7 +1099,6 @@ function handleSubmit(event) {
   }
 
   if (event.target.id === "form-new-product") {
-    event.preventDefault();
     const formData = new FormData(event.target);
     const productData = {
       nombre: formData.get("nombre"),
@@ -1108,7 +1113,6 @@ function handleSubmit(event) {
   }
 
   if (event.target.id === "form-new-supplier") {
-    event.preventDefault();
     const formData = new FormData(event.target);
     const supplierData = {
       nombre: formData.get("nombre"),
