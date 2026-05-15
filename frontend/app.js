@@ -4,12 +4,9 @@ const STORAGE_KEYS = {
   appVersion: "ventapro-app-version",
 };
 
-const APP_VERSION = "2026-05-14-4";
+const APP_VERSION = "2026-05-15-2";
 
-const demoUsers = {
-  admin: { username: "admin", password: "admin", name: "Administrador", role: "admin", initials: "A" },
-  cajero: { username: "cajero", password: "cajero", name: "Cajero", role: "cashier", initials: "C" },
-};
+// Demo users removed for production
 
 const data = {
   products: [],
@@ -72,6 +69,22 @@ function escapeAttr(str) {
   return escapeHtml(str).replace(/"/g, '&quot;');
 }
 
+// Small helper to lighten/darken a hex color by percent (-100..100)
+function shadeHexColor(hex, percent) {
+  if (!hex) return hex;
+  let h = String(hex).replace('#', '');
+  if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  const num = parseInt(h, 16);
+  let r = (num >> 16) & 0xff;
+  let g = (num >> 8) & 0xff;
+  let b = num & 0xff;
+  const amt = Math.round(2.55 * percent);
+  r = Math.min(255, Math.max(0, r + amt));
+  g = Math.min(255, Math.max(0, g + amt));
+  b = Math.min(255, Math.max(0, b + amt));
+  return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+
 function polarToCartesian(centerX, centerY, radius, angleInDegrees) {
   const angleInRadians = (angleInDegrees - 90) * Math.PI / 180.0;
   return {
@@ -85,6 +98,17 @@ function describeArc(x, y, radius, startAngle, endAngle){
   const end = polarToCartesian(x, y, radius, startAngle);
   const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
   return `M ${x} ${y} L ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y} Z`;
+}
+
+function getProductCategoryLabel(product) {
+  if (!product) return "Sin categoría";
+  if (product.categoria_nombre) return product.categoria_nombre;
+  if (product.categoria?.nombre) return product.categoria.nombre;
+  if (product.categoria) {
+    const matchedCategory = data.categories.find((category) => String(category.id) === String(product.categoria));
+    if (matchedCategory?.nombre) return matchedCategory.nombre;
+  }
+  return "Sin categoría";
 }
 
 const nav = {
@@ -123,6 +147,7 @@ const state = {
 let liveSyncTimer = null;
 let loadAllDataInProgress = false;
 let renderTimeout = null;
+let modalResolver = null;
 
 const root = document.getElementById("root");
 
@@ -374,7 +399,7 @@ async function createCashier(userData) {
 
   try {
     const res = await apiCall("/usuarios/", "POST", cashierData);
-    alert(`Cajero ${cashierData.username} creado exitosamente.`);
+    toast(`Cajero ${cashierData.username} creado exitosamente.`, "success");
     
     // Recargamos la lista de cajeros desde el backend
     data.cashiers = await apiCall("/usuarios/");
@@ -385,7 +410,7 @@ async function createCashier(userData) {
     return true;
   } catch (e) {
     console.error("Error al registrar cajero:", e.message);
-    alert(`Error: ${e.message}`);
+    toast(`Error: ${e.message}`, "danger");
     // Reiniciar liveSync anche en caso de error
     startLiveSync();
     return false;
@@ -473,6 +498,13 @@ function applySettings() {
   document.body.classList.toggle("compact-sidebar", state.settings.compactSidebar);
   document.body.classList.toggle("reduce-motion", state.settings.reduceMotion);
   document.documentElement.style.setProperty("--accent", state.settings.accent);
+  // derive a secondary accent shade for subtle UI accents
+  try {
+    const accent2 = shadeHexColor(state.settings.accent, -12);
+    document.documentElement.style.setProperty("--accent-2", accent2);
+  } catch (e) {
+    document.documentElement.style.setProperty("--accent-2", state.settings.accent);
+  }
   const themeMeta = document.querySelector('meta[name="theme-color"]');
   if (themeMeta) themeMeta.setAttribute("content", state.settings.darkMode ? "#0f172a" : state.settings.accent);
 }
@@ -544,17 +576,7 @@ function loginView() {
           </label>
           <button class="button" type="submit">${iconArrow()} Iniciar Sesión</button>
         </form>
-        <p class="login-demo-title">Usuarios de demostración:</p>
-        <div class="demo-list">
-          <div class="demo-card">
-            <div><strong>Administrador</strong><span>Usuario: admin</span></div>
-            <button class="button ghost" type="button" data-demo="admin">Admin</button>
-          </div>
-          <div class="demo-card">
-            <div><strong>Cajero</strong><span>Usuario: cajero</span></div>
-            <button class="button ghost" type="button" data-demo="cajero">Cajero</button>
-          </div>
-        </div>
+        <!-- Demo users removed -->
       </section>
     </main>
   `;
@@ -722,9 +744,9 @@ function dashboardView() {
 
 function posView() {
   const query = state.search.pos.trim().toLowerCase();
-  const products = data.products.filter((product) => !query || [product.nombre, product.codigo, product.categoria?.nombre].some((value) => value && value.toLowerCase().includes(query)));
+  const products = data.products.filter((product) => product.activo !== false && (!query || [product.nombre, product.codigo, getProductCategoryLabel(product)].some((value) => value && value.toLowerCase().includes(query))));
   const totals = cartTotals();
-  const cartItems = state.cart.map((item) => ({ ...item, product: data.products.find((p) => p.id === item.id) }));
+  const cartItems = state.cart.map((item) => ({ ...item, product: data.products.find((p) => String(p.id) === String(item.id)) }));
 
   return `
     <section class="view pos-view">
@@ -793,8 +815,14 @@ function posView() {
 function inventoryView() {
   const query = state.search.inventory.trim().toLowerCase();
   const category = state.search.category;
-  const categories = ["all", ...new Set(data.products.map((item) => item.categoria?.nombre || "Sin categoría"))];
-  const rows = data.products.filter((product) => (!query || [product.nombre, product.codigo].some((value) => value && value.toLowerCase().includes(query))) && (category === "all" || product.categoria?.nombre === category));
+  const hasUncategorized = data.products.some((item) => getProductCategoryLabel(item) === "Sin categoría");
+  const categories = [
+    "all",
+    ...data.categories.map((item) => item.nombre).filter(Boolean),
+    ...(hasUncategorized ? ["Sin categoría"] : []),
+  ];
+  const uniqueCategories = ["all", ...new Set(categories.filter(Boolean).map((item) => String(item)))];
+  const rows = data.products.filter((product) => (!query || [product.nombre, product.codigo, getProductCategoryLabel(product)].some((value) => value && value.toLowerCase().includes(query))) && (category === "all" || (category === "Sin categoría" ? getProductCategoryLabel(product) === "Sin categoría" : getProductCategoryLabel(product) === category)));
 
   return `
     <section class="view inventory-view">
@@ -805,7 +833,7 @@ function inventoryView() {
       <section class="panel pad inventory-list">
         <div class="toolbar">
           <div class="search-wrap"><span class="search-icon">${iconSearch()}</span><input class="search-input" data-search="inventory" type="text" placeholder="Buscar por nombre o código..." value="${escapeAttr(state.search.inventory)}" /></div>
-          <select class="select" data-search-category="inventory">${categories.map((item) => `<option value="${item}" ${item === category ? "selected" : ""}>${item === "all" ? "Todas las categorías" : item}</option>`).join("")}</select>
+          <select class="select" data-search-category="inventory">${uniqueCategories.map((item) => `<option value="${item}" ${item === category ? "selected" : ""}>${item === "all" ? "Todas las categorías" : item}</option>`).join("")}</select>
         </div>
         <div class="table-responsive" style="margin-top:14px;">
           <table>
@@ -816,7 +844,7 @@ function inventoryView() {
                 return `
                 <tr>
                   <td><strong>${product.nombre}</strong><br><span class="subtle-text">${product.codigo}</span></td>
-                  <td><span class="chip neutral">${product.categoria?.nombre || "Sin categoría"}</span></td>
+                  <td><span class="chip neutral">${getProductCategoryLabel(product)}</span></td>
                   <td><span class="chip ${product.stock_actual <= product.stock_minimo ? "danger" : "success"}">${product.stock_actual}</span></td>
                   <td>${formatCurrency(product.costo)}</td>
                   <td>${formatCurrency(product.precio_venta)}</td>
@@ -989,7 +1017,7 @@ function wireCharts() {
 }
 
 function handleClick(event) {
-  const target = event.target.closest("[data-action], [data-view], [data-demo]");
+  const target = event.target.closest("[data-action], [data-view]");
   if (!target) return;
 
   if (target.dataset.action === "modal-close") {
@@ -997,17 +1025,14 @@ function handleClick(event) {
     return;
   }
 
-  if (target.dataset.demo) {
-    const demo = demoUsers[target.dataset.demo];
-    const username = document.getElementById("login-username");
-    const password = document.getElementById("login-password");
-    if (username && password) {
-      username.value = demo.username;
-      password.value = demo.password;
-    }
-    login(demo.username, demo.password);
+  if (target.dataset.action === "modal-confirm-yes") {
+    try { if (modalResolver) modalResolver(true); } catch(e) {}
+    modalResolver = null;
+    closeModal();
     return;
   }
+
+  // demo buttons removed — no auto-fill/login for demo users
 
   if (target.dataset.view) {
     state.activeView = target.dataset.view;
@@ -1122,12 +1147,44 @@ function handleSubmit(event) {
     const productData = {
       nombre: formData.get("nombre"),
       codigo: formData.get("codigo"),
+      codigo_barras: formData.get("codigo_barras") || "",
       stock_actual: parseInt(formData.get("stock_actual") || 0),
+      stock_minimo: parseInt(formData.get("stock_minimo") || 0),
+      descripcion: formData.get("descripcion") || "",
       precio_venta: parseFloat(formData.get("precio_venta")),
       costo: parseFloat(formData.get("costo") || 0),
-      activo: true,
+      categoria: formData.get("categoria") || null,
+      proveedor: formData.get("proveedor") || null,
+      activo: formData.get("activo") === "on",
     };
     createProduct(productData).then(() => closeModal());
+    return;
+  }
+
+  if (event.target.id === "form-edit-product") {
+    const formData = new FormData(event.target);
+    const productId = event.target.dataset.id;
+    const productData = {
+      nombre: formData.get("nombre"),
+      codigo: formData.get("codigo"),
+      codigo_barras: formData.get("codigo_barras") || "",
+      descripcion: formData.get("descripcion") || "",
+      stock_actual: parseInt(formData.get("stock_actual") || 0),
+      stock_minimo: parseInt(formData.get("stock_minimo") || 0),
+      costo: parseFloat(formData.get("costo") || 0),
+      precio_venta: parseFloat(formData.get("precio_venta") || 0),
+      categoria: formData.get("categoria") || null,
+      proveedor: formData.get("proveedor") || null,
+      activo: formData.get("activo") === "on",
+    };
+    apiCall(`/productos/${productId}/`, "PATCH", productData)
+      .then(() => loadAllData())
+      .then(() => {
+        toast("Producto actualizado.", "success");
+        closeModal();
+        render();
+      })
+      .catch((e) => toast(`Error: ${e.message}`, "danger"));
     return;
   }
 
@@ -1141,6 +1198,62 @@ function handleSubmit(event) {
       activo: true,
     };
     createSupplier(supplierData).then(() => closeModal());
+    return;
+  }
+
+  if (event.target.id === "form-edit-supplier") {
+    const formData = new FormData(event.target);
+    const supplierId = event.target.dataset.id;
+    const supplierData = {
+      nombre: formData.get("nombre"),
+      documento_fiscal: formData.get("documento_fiscal") || "",
+      contacto: formData.get("contacto") || "",
+      telefono: formData.get("telefono") || "",
+      correo: formData.get("correo") || "",
+      direccion: formData.get("direccion") || "",
+      activo: formData.get("activo") === "on",
+    };
+    apiCall(`/proveedores/${supplierId}/`, "PATCH", supplierData)
+      .then(() => loadAllData())
+      .then(() => {
+        toast("Proveedor actualizado.", "success");
+        closeModal();
+        render();
+      })
+      .catch((e) => toast(`Error: ${e.message}`, "danger"));
+    return;
+  }
+
+  if (event.target.id === "form-edit-cashier") {
+    const formData = new FormData(event.target);
+    const cashierId = event.target.dataset.id;
+    const password = formData.get("password") || "";
+    const cashierData = {
+      first_name: formData.get("first_name") || "",
+      last_name: formData.get("last_name") || "",
+      username: formData.get("username") || "",
+      email: formData.get("email") || "",
+      telefono: formData.get("telefono") || "",
+      rol: formData.get("rol") || "vendedor",
+    };
+    if (password) cashierData.password = password;
+    apiCall(`/usuarios/${cashierId}/`, "PATCH", cashierData)
+      .then(() => loadAllData())
+      .then(() => {
+        toast("Cajero actualizado.", "success");
+        closeModal();
+        render();
+      })
+      .catch((e) => toast(`Error: ${e.message}`, "danger"));
+    return;
+  }
+
+  if (event.target.id === "modal-prompt-form") {
+    const formData = new FormData(event.target);
+    const value = formData.get("value");
+    try { if (modalResolver) modalResolver(value === null ? null : String(value).trim()); } catch(e) {}
+    modalResolver = null;
+    closeModal();
     return;
   }
 }
@@ -1222,9 +1335,13 @@ function logout() {
 }
 
 function addToCart(productId) {
-  const product = data.products.find((item) => item.id === productId);
+  const product = data.products.find((item) => String(item.id) === String(productId));
   if (!product) return;
-  const existing = state.cart.find((item) => item.id === productId);
+  if (product.activo === false) {
+    toast(`El producto ${product.nombre} está inactivo y no se puede vender.`, "warning");
+    return;
+  }
+  const existing = state.cart.find((item) => String(item.id) === String(productId));
   const qty = existing ? existing.qty : 0;
   if (qty >= product.stock_actual) {
     toast(`No hay más stock disponible para ${product.nombre}.`, "warning");
@@ -1290,45 +1407,79 @@ async function finalizeSale() {
   }
 }
 
-function promptIfCancelled(label, currentValue = "") {
-  const value = window.prompt(label, currentValue);
-  return value === null ? null : value.trim();
+function modalPromptHtml(label, defaultValue = "") {
+  return `
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h2>${escapeHtml(label)}</h2>
+        <button class="modal-close" type="button" data-action="modal-close">×</button>
+      </div>
+      <form id="modal-prompt-form" class="modal-form">
+        <div class="form-group">
+          <input class="input" name="value" id="modal-prompt-input" type="text" value="${escapeAttr(defaultValue)}" />
+        </div>
+        <div class="form-actions">
+          <button class="button" type="submit">Aceptar</button>
+          <button class="button ghost" type="button" data-action="modal-close">Cancelar</button>
+        </div>
+      </form>
+    </div>
+  `;
 }
 
-async function editProduct(productId) {
-  const product = data.products.find((item) => item.id === productId);
-  if (!product) return;
+function modalConfirmHtml(message) {
+  return `
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h2>Confirmar</h2>
+        <button class="modal-close" type="button" data-action="modal-close">×</button>
+      </div>
+      <div class="modal-form" style="padding:16px">
+        <p>${escapeHtml(message)}</p>
+        <div class="form-actions">
+          <button class="button" type="button" data-action="modal-confirm-yes">Aceptar</button>
+          <button class="button ghost" type="button" data-action="modal-close">Cancelar</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
 
-  const nombre = promptIfCancelled("Nombre del producto", product.nombre);
-  if (nombre === null) return;
-  const codigo = promptIfCancelled("Código", product.codigo);
-  if (codigo === null) return;
-  const stockActual = promptIfCancelled("Stock actual", String(product.stock_actual ?? 0));
-  if (stockActual === null) return;
-  const stockMinimo = promptIfCancelled("Stock mínimo", String(product.stock_minimo ?? 0));
-  if (stockMinimo === null) return;
-  const costo = promptIfCancelled("Costo", String(product.costo ?? 0));
-  if (costo === null) return;
-  const precioVenta = promptIfCancelled("Precio de venta", String(product.precio_venta ?? 0));
-  if (precioVenta === null) return;
-
-  await apiCall(`/productos/${productId}/`, "PATCH", {
-    nombre,
-    codigo,
-    stock_actual: Number(stockActual),
-    stock_minimo: Number(stockMinimo),
-    costo: Number(costo),
-    precio_venta: Number(precioVenta),
+function modalPrompt(label, defaultValue = "") {
+  return new Promise((resolve) => {
+    modalResolver = resolve;
+    showModal(modalPromptHtml(label, defaultValue));
+    // focus input after render
+    setTimeout(() => {
+      const el = document.getElementById("modal-prompt-input");
+      if (el) el.focus();
+    }, 50);
   });
-  await loadAllData();
-  toast("Producto actualizado.", "success");
-  render();
+}
+
+function modalConfirm(message) {
+  return new Promise((resolve) => {
+    modalResolver = resolve;
+    showModal(modalConfirmHtml(message));
+  });
+}
+
+async function promptIfCancelled(label, currentValue = "") {
+  const v = await modalPrompt(label, currentValue);
+  return v === null ? null : String(v).trim();
+}
+
+
+async function editProduct(productId) {
+  const product = data.products.find((item) => String(item.id) === String(productId));
+  if (!product) return;
+  showModal(formEditProduct(product));
 }
 
 async function deleteProduct(productId) {
-  const product = data.products.find((item) => item.id === productId);
+  const product = data.products.find((item) => String(item.id) === String(productId));
   if (!product) return;
-  if (!window.confirm(`¿Desactivar producto ${product.nombre}?`)) return;
+  if (!(await modalConfirm(`¿Desactivar producto ${product.nombre}?`))) return;
   try {
     await apiCall(`/productos/${productId}/`, "PATCH", { activo: false });
     await loadAllData();
@@ -1340,37 +1491,15 @@ async function deleteProduct(productId) {
 }
 
 async function editSupplier(supplierId) {
-  const supplier = data.suppliers.find((item) => item.id === supplierId);
+  const supplier = data.suppliers.find((item) => String(item.id) === String(supplierId));
   if (!supplier) return;
-
-  const nombre = promptIfCancelled("Nombre del proveedor", supplier.nombre);
-  if (nombre === null) return;
-  const telefono = promptIfCancelled("Teléfono", supplier.telefono || "");
-  if (telefono === null) return;
-  const correo = promptIfCancelled("Correo", supplier.correo || "");
-  if (correo === null) return;
-  const direccion = promptIfCancelled("Dirección", supplier.direccion || "");
-  if (direccion === null) return;
-  const contacto = promptIfCancelled("Contacto", supplier.contacto || "");
-  if (contacto === null) return;
-
-  await apiCall(`/proveedores/${supplierId}/`, "PATCH", {
-    nombre,
-    telefono,
-    correo,
-    direccion,
-    contacto,
-    activo: supplier.activo !== false,
-  });
-  await loadAllData();
-  toast("Proveedor actualizado.", "success");
-  render();
+  showModal(formEditSupplier(supplier));
 }
 
 async function deleteSupplier(supplierId) {
-  const supplier = data.suppliers.find((item) => item.id === supplierId);
+  const supplier = data.suppliers.find((item) => String(item.id) === String(supplierId));
   if (!supplier) return;
-  if (!window.confirm(`Eliminar proveedor ${supplier.nombre}?`)) return;
+  if (!(await modalConfirm(`Eliminar proveedor ${supplier.nombre}?`))) return;
   await apiCall(`/proveedores/${supplierId}/`, "DELETE");
   await loadAllData();
   toast("Proveedor eliminado.", "success");
@@ -1380,39 +1509,13 @@ async function deleteSupplier(supplierId) {
 async function editCashier(cashierId) {
   const cashier = data.cashiers.find((item) => String(item.id) === String(cashierId));
   if (!cashier) return;
-
-  const firstName = promptIfCancelled("Nombre", cashier.first_name || "");
-  if (firstName === null) return;
-  const lastName = promptIfCancelled("Apellido", cashier.last_name || "");
-  if (lastName === null) return;
-  const username = promptIfCancelled("Usuario", cashier.username || "");
-  if (username === null) return;
-  const email = promptIfCancelled("Correo", cashier.email || "");
-  if (email === null) return;
-  const telefono = promptIfCancelled("Teléfono", cashier.telefono || "");
-  if (telefono === null) return;
-  const rol = promptIfCancelled("Rol (vendedor/administrador)", cashier.rol || "vendedor");
-  if (rol === null) return;
-  const password = promptIfCancelled("Nueva contraseña (dejar vacía para no cambiar)", "");
-  if (password === null) return;
-
-  const payload = { first_name: firstName, last_name: lastName, username, email, telefono, rol };
-  if (password) payload.password = password;
-
-  try {
-    await apiCall(`/usuarios/${cashierId}/`, "PATCH", payload);
-    await loadAllData();
-    toast("Cajero actualizado.", "success");
-    render();
-  } catch (e) {
-    toast(`Error: ${e.message}`, "danger");
-  }
+  showModal(formEditCashier(cashier));
 }
 
 async function deleteCashier(cashierId) {
   const cashier = data.cashiers.find((item) => String(item.id) === String(cashierId));
   if (!cashier) return;
-  if (!window.confirm(`Eliminar cajero ${cashier.username}?`)) return;
+  if (!(await modalConfirm(`Eliminar cajero ${cashier.username}?`))) return;
   try {
     await apiCall(`/usuarios/${cashierId}/`, "DELETE");
     await loadAllData();
@@ -1458,6 +1561,11 @@ function showModal(formHtml) {
 }
 
 function closeModal() {
+  // if there is a pending modal resolver, resolve as cancelled (null/false)
+  if (modalResolver) {
+    try { modalResolver(null); } catch (e) {}
+    modalResolver = null;
+  }
   state.showModal = false;
   state.modalForm = null;
   render();
@@ -1533,6 +1641,18 @@ function formNewProduct() {
           <input class="input" name="stock_actual" type="number" min="0" value="0" />
         </div>
         <div class="form-group">
+          <label>Stock mínimo</label>
+          <input class="input" name="stock_minimo" type="number" min="0" value="0" />
+        </div>
+        <div class="form-group">
+          <label>Código de barras</label>
+          <input class="input" name="codigo_barras" type="text" />
+        </div>
+        <div class="form-group">
+          <label>Descripción</label>
+          <textarea class="input" name="descripcion" rows="3"></textarea>
+        </div>
+        <div class="form-group">
           <label>Precio Venta</label>
           <input class="input" name="precio_venta" type="number" step="0.01" required />
         </div>
@@ -1540,8 +1660,191 @@ function formNewProduct() {
           <label>Costo</label>
           <input class="input" name="costo" type="number" step="0.01" />
         </div>
+        <div class="form-group">
+          <label>Categoría</label>
+          <select class="input" name="categoria">
+            ${optionList(data.categories, "", "Sin categoría")}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Proveedor</label>
+          <select class="input" name="proveedor">
+            ${optionList(data.suppliers, "", "Sin proveedor")}
+          </select>
+        </div>
+        <div class="form-group" style="flex-direction:row;align-items:center;gap:10px;">
+          <input type="checkbox" name="activo" checked />
+          <label>Activo</label>
+        </div>
         <div class="form-actions">
           <button class="button" type="submit">Crear Producto</button>
+          <button class="button ghost" type="button" data-action="modal-close">Cancelar</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+function optionList(items, selectedId = "", placeholder = "Seleccionar...") {
+  const selected = String(selectedId ?? "");
+  return [`<option value="">${placeholder}</option>`, ...items.map((item) => {
+    const itemId = String(item.id ?? "");
+    const itemLabel = item.nombre || item.username || item.codigo || item.codigo_barras || item.name || itemId;
+    return `<option value="${escapeAttr(itemId)}" ${itemId === selected ? "selected" : ""}>${escapeHtml(itemLabel)}</option>`;
+  })].join("");
+}
+
+function formEditProduct(product) {
+  return `
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h2>Editar Producto</h2>
+        <button class="modal-close" type="button" data-action="modal-close">×</button>
+      </div>
+      <form id="form-edit-product" class="modal-form" data-id="${escapeAttr(product.id)}">
+        <div class="form-group">
+          <label>Nombre</label>
+          <input class="input" name="nombre" type="text" required value="${escapeAttr(product.nombre || "")}" />
+        </div>
+        <div class="form-group">
+          <label>Código</label>
+          <input class="input" name="codigo" type="text" required value="${escapeAttr(product.codigo || "")}" />
+        </div>
+        <div class="form-group">
+          <label>Código de barras</label>
+          <input class="input" name="codigo_barras" type="text" value="${escapeAttr(product.codigo_barras || "")}" />
+        </div>
+        <div class="form-group">
+          <label>Descripción</label>
+          <textarea class="input" name="descripcion" rows="3">${escapeHtml(product.descripcion || "")}</textarea>
+        </div>
+        <div class="form-group">
+          <label>Stock actual</label>
+          <input class="input" name="stock_actual" type="number" min="0" value="${escapeAttr(product.stock_actual ?? 0)}" />
+        </div>
+        <div class="form-group">
+          <label>Stock mínimo</label>
+          <input class="input" name="stock_minimo" type="number" min="0" value="${escapeAttr(product.stock_minimo ?? 0)}" />
+        </div>
+        <div class="form-group">
+          <label>Costo</label>
+          <input class="input" name="costo" type="number" step="0.01" value="${escapeAttr(product.costo ?? 0)}" />
+        </div>
+        <div class="form-group">
+          <label>Precio venta</label>
+          <input class="input" name="precio_venta" type="number" step="0.01" value="${escapeAttr(product.precio_venta ?? 0)}" />
+        </div>
+        <div class="form-group">
+          <label>Categoría</label>
+          <select class="input" name="categoria">
+            ${optionList(data.categories, product.categoria?.id || "", "Sin categoría")}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Proveedor</label>
+          <select class="input" name="proveedor">
+            ${optionList(data.suppliers, product.proveedor?.id || "", "Sin proveedor")}
+          </select>
+        </div>
+        <div class="form-group" style="flex-direction:row;align-items:center;gap:10px;">
+          <input type="checkbox" name="activo" ${product.activo !== false ? "checked" : ""} />
+          <label>Activo</label>
+        </div>
+        <div class="form-actions">
+          <button class="button" type="submit">Guardar Cambios</button>
+          <button class="button ghost" type="button" data-action="modal-close">Cancelar</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+function formEditSupplier(supplier) {
+  return `
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h2>Editar Proveedor</h2>
+        <button class="modal-close" type="button" data-action="modal-close">×</button>
+      </div>
+      <form id="form-edit-supplier" class="modal-form" data-id="${escapeAttr(supplier.id)}">
+        <div class="form-group">
+          <label>Nombre</label>
+          <input class="input" name="nombre" type="text" required value="${escapeAttr(supplier.nombre || "")}" />
+        </div>
+        <div class="form-group">
+          <label>Documento fiscal</label>
+          <input class="input" name="documento_fiscal" type="text" value="${escapeAttr(supplier.documento_fiscal || "")}" />
+        </div>
+        <div class="form-group">
+          <label>Contacto</label>
+          <input class="input" name="contacto" type="text" value="${escapeAttr(supplier.contacto || "")}" />
+        </div>
+        <div class="form-group">
+          <label>Teléfono</label>
+          <input class="input" name="telefono" type="tel" value="${escapeAttr(supplier.telefono || "")}" />
+        </div>
+        <div class="form-group">
+          <label>Correo</label>
+          <input class="input" name="correo" type="email" value="${escapeAttr(supplier.correo || "")}" />
+        </div>
+        <div class="form-group">
+          <label>Dirección</label>
+          <input class="input" name="direccion" type="text" value="${escapeAttr(supplier.direccion || "")}" />
+        </div>
+        <div class="form-group" style="flex-direction:row;align-items:center;gap:10px;">
+          <input type="checkbox" name="activo" ${supplier.activo !== false ? "checked" : ""} />
+          <label>Activo</label>
+        </div>
+        <div class="form-actions">
+          <button class="button" type="submit">Guardar Cambios</button>
+          <button class="button ghost" type="button" data-action="modal-close">Cancelar</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+function formEditCashier(cashier) {
+  return `
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h2>Editar Cajero</h2>
+        <button class="modal-close" type="button" data-action="modal-close">×</button>
+      </div>
+      <form id="form-edit-cashier" class="modal-form" data-id="${escapeAttr(cashier.id)}">
+        <div class="form-group">
+          <label>Nombre</label>
+          <input class="input" name="first_name" type="text" required value="${escapeAttr(cashier.first_name || "")}" />
+        </div>
+        <div class="form-group">
+          <label>Apellido</label>
+          <input class="input" name="last_name" type="text" value="${escapeAttr(cashier.last_name || "")}" />
+        </div>
+        <div class="form-group">
+          <label>Usuario</label>
+          <input class="input" name="username" type="text" required value="${escapeAttr(cashier.username || "")}" />
+        </div>
+        <div class="form-group">
+          <label>Email</label>
+          <input class="input" name="email" type="email" value="${escapeAttr(cashier.email || "")}" />
+        </div>
+        <div class="form-group">
+          <label>Teléfono</label>
+          <input class="input" name="telefono" type="tel" value="${escapeAttr(cashier.telefono || "")}" />
+        </div>
+        <div class="form-group">
+          <label>Rol</label>
+          <select class="input" name="rol" required>
+            <option value="vendedor" ${cashier.rol === "vendedor" ? "selected" : ""}>Vendedor/Cajero</option>
+            <option value="administrador" ${cashier.rol === "administrador" ? "selected" : ""}>Administrador</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Nueva contraseña</label>
+          <input class="input" name="password" type="password" placeholder="Dejar vacío para no cambiar" />
+        </div>
+        <div class="form-actions">
+          <button class="button" type="submit">Guardar Cambios</button>
           <button class="button ghost" type="button" data-action="modal-close">Cancelar</button>
         </div>
       </form>
