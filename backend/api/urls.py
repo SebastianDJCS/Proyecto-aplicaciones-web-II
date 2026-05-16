@@ -7,11 +7,13 @@ from .views import (
     CategoriaViewSet,
     DashboardViewSet,
     DetalleCompraViewSet,
+    GastoViewSet,
     ImportarProductosView,
     ListaPrecioItemViewSet,
     ListaPrecioViewSet,
     ProductoViewSet,
     ProveedorViewSet,
+    ReportesViewSet,
     SyncViewSet,
     TurnoCajaViewSet,
     UsuarioViewSet,
@@ -31,6 +33,8 @@ router.register("compras", CompraViewSet, basename="compra")
 router.register("detalle-compras", DetalleCompraViewSet, basename="detalle-compra")
 router.register("dashboard", DashboardViewSet, basename="dashboard")
 router.register("sync", SyncViewSet, basename="sync")
+router.register("gastos", GastoViewSet, basename="gasto")
+router.register("reportes", ReportesViewSet, basename="reporte")
 
 urlpatterns = [
     path("productos/importar/", ImportarProductosView.as_view(), name="importar-productos"),

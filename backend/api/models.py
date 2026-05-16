@@ -439,7 +439,7 @@ class Venta(UUIDTimeStampedModel):
 
 class DetalleVenta(UUIDTimeStampedModel):
     venta = models.ForeignKey(Venta, related_name="detalles", on_delete=models.CASCADE)
-    producto = models.ForeignKey(Producto, related_name="detalles_venta", on_delete=models.PROTECT)
+    producto = models.ForeignKey(Producto, related_name="detalles_venta", on_delete=models.CASCADE)
     cantidad = models.PositiveIntegerField()
     precio_unitario = models.DecimalField(max_digits=12, decimal_places=2)
     descuento_unitario = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
@@ -565,3 +565,39 @@ class DetalleCompra(UUIDTimeStampedModel):
 
     def __str__(self) -> str:
         return f"{self.producto} x {self.cantidad}"
+
+
+class Gasto(UUIDTimeStampedModel):
+    TIPO_ELECTRICIDAD = "electricidad"
+    TIPO_AGUA = "agua"
+    TIPO_INTERNET = "internet"
+    TIPO_ALQUILER = "alquiler"
+    TIPO_SUELDO = "sueldo"
+    TIPO_MANTENIMIENTO = "mantenimiento"
+    TIPO_INSUMOS = "insumos"
+    TIPO_OTRO = "otro"
+
+    TIPOS = [
+        (TIPO_ELECTRICIDAD, "Electricidad"),
+        (TIPO_AGUA, "Agua"),
+        (TIPO_INTERNET, "Internet"),
+        (TIPO_ALQUILER, "Alquiler"),
+        (TIPO_SUELDO, "Sueldo"),
+        (TIPO_MANTENIMIENTO, "Mantenimiento"),
+        (TIPO_INSUMOS, "Insumos"),
+        (TIPO_OTRO, "Otro"),
+    ]
+
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, related_name="gastos", on_delete=models.PROTECT)
+    fecha = models.DateField(default=timezone.localdate)
+    monto = models.DecimalField(max_digits=12, decimal_places=2)
+    tipo = models.CharField(max_length=20, choices=TIPOS, default=TIPO_OTRO)
+    descripcion = models.TextField(blank=True)
+
+    class Meta:
+        verbose_name = "gasto"
+        verbose_name_plural = "gastos"
+        ordering = ["-fecha", "-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.fecha} - {self.get_tipo_display()} - {self.monto}"

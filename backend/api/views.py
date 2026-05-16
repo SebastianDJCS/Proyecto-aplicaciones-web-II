@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from django.db import transaction
@@ -14,13 +15,14 @@ from rest_framework.views import APIView
 import pandas as pd
 import io
 
-from .models import Compra, Categoria, DetalleCompra, ListaPrecio, ListaPrecioItem, Producto, Proveedor, TurnoCaja, Usuario, Venta, EstadoSync, ROL_ADMINISTRADOR
+from .models import Compra, Categoria, DetalleCompra, DetalleVenta, Gasto, ListaPrecio, ListaPrecioItem, Producto, Proveedor, TurnoCaja, Usuario, Venta, EstadoSync, ROL_ADMINISTRADOR
 from .permissions import IsAdministrador, IsAdministradorOReadOnly, IsAdministradorOVendedor
 from .serializers import (
     CompraSerializer,
     DashboardResumenSerializer,
     CategoriaSerializer,
     DetalleCompraSerializer,
+    GastoSerializer,
     ListaPrecioItemSerializer,
     ListaPrecioSerializer,
     ProductoSerializer,
@@ -174,26 +176,60 @@ class DashboardViewSet(viewsets.ViewSet):
     permission_classes = [IsAdministradorOVendedor]
 
     def list(self, request):
+        es_admin = request.user.rol == ROL_ADMINISTRADOR
         base_ventas = Venta.objects.filter(estado=Venta.ESTADO_PAGADA)
-        base_compras = Compra.objects.all()
-        base_turnos = TurnoCaja.objects.all()
 
-        if request.user.rol != ROL_ADMINISTRADOR:
+        if not es_admin:
             base_ventas = base_ventas.filter(vendedor=request.user)
-            base_compras = base_compras.filter(usuario=request.user)
-            base_turnos = base_turnos.filter(usuario=request.user)
 
         hoy = timezone.localdate()
+        hoy_dt = datetime.combine(hoy, datetime.min.time())
+        hoy_dt = timezone.make_aware(hoy_dt)
+        manana_dt = hoy_dt + timedelta(days=1)
+
+        ventas_hoy_qs = base_ventas.filter(fecha_venta__gte=hoy_dt, fecha_venta__lt=manana_dt)
+        ventas_hoy_total = ventas_hoy_qs.aggregate(total=Sum("total"))["total"] or Decimal("0")
+
+        dias_semana = []
+        for i in range(7):
+            fecha = hoy - timedelta(days=6 - i)
+            fecha_inicio = datetime.combine(fecha, datetime.min.time())
+            fecha_inicio = timezone.make_aware(fecha_inicio)
+            fecha_fin = fecha_inicio + timedelta(days=1)
+            total = base_ventas.filter(fecha_venta__gte=fecha_inicio, fecha_venta__lt=fecha_fin).aggregate(total=Sum("total"))["total"] or 0
+            dias_semana.append({
+                "day": ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"][fecha.weekday()],
+                "value": float(total or 0)
+            })
+
+        productos_top = list(DetalleVenta.objects.filter(
+            venta__estado=Venta.ESTADO_PAGADA,
+            venta__fecha_venta__gte=hoy_dt - timedelta(days=30)
+        ).values("producto__nombre").annotate(
+            total_vendido=Sum("subtotal")
+        ).order_by("-total_vendido")[:10])
+
+        colores = ["#dc2626", "#7c3aed", "#059669", "#d97706", "#0891b2", "#db2777", "#4f46e5", "#dc2626", "#65a30d", "#9333ea"]
+
+        top_products = []
+        if productos_top:
+            total_top = sum(float(p["total_vendido"]) for p in productos_top) or 1
+            for i, p in enumerate(productos_top[:5]):
+                top_products.append({
+                    "label": p["producto__nombre"],
+                    "value": round(float(p["total_vendido"]) / total_top * 100),
+                    "color": colores[i % len(colores)]
+                })
 
         resumen = {
             "productos": Producto.objects.filter(activo=True).count(),
             "productos_stock_bajo": Producto.objects.filter(activo=True, stock_actual__lte=F("stock_minimo")).count(),
-            "ventas_hoy": base_ventas.filter(fecha_venta__date=hoy).count(),
-            "total_ventas_hoy": base_ventas.filter(fecha_venta__date=hoy).aggregate(
-                total=Coalesce(Sum("total"), Decimal("0.00"), output_field=DecimalField(max_digits=12, decimal_places=2))
-            )["total"],
-            "turnos_abiertos": base_turnos.filter(estado=TurnoCaja.ESTADO_ABIERTO).count(),
-            "compras_hoy": base_compras.filter(fecha_compra__date=hoy).count(),
+            "ventas_hoy": ventas_hoy_qs.count(),
+            "total_ventas_hoy": float(ventas_hoy_total),
+            "turnos_abiertos": TurnoCaja.objects.filter(estado=TurnoCaja.ESTADO_ABIERTO).count(),
+            "compras_hoy": Compra.objects.filter(fecha_compra__gte=hoy_dt, fecha_compra__lt=manana_dt).count(),
+            "weeklySales": dias_semana,
+            "topProducts": top_products,
         }
         serializer = DashboardResumenSerializer(resumen)
         return Response(serializer.data)
@@ -410,3 +446,70 @@ class ImportarProductosView(APIView):
             return Decimal(str(value).replace(",", "."))
         except:
             return Decimal("0.00")
+
+
+class GastoViewSet(viewsets.ModelViewSet):
+    queryset = Gasto.objects.all().order_by("-fecha")
+    serializer_class = GastoSerializer
+    permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        serializer.save(usuario=self.request.user)
+
+
+class ReportesViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        fecha_str = request.query_params.get("fecha")
+        mes = request.query_params.get("mes")
+        anio = request.query_params.get("anio")
+
+        if fecha_str:
+            try:
+                fecha = timezone.datetime.strptime(fecha_str, "%Y-%m-%d").date()
+            except ValueError:
+                fecha = timezone.localdate()
+        else:
+            fecha = timezone.localdate()
+
+        ventas_dia = Venta.objects.filter(fecha_venta__date=fecha, estado=Venta.ESTADO_PAGADA)
+        gastos_dia = Gasto.objects.filter(fecha=fecha)
+
+        total_ventas_dia = ventas_dia.aggregate(total=Sum("total"))["total"] or Decimal("0.00")
+        total_gastos_dia = gastos_dia.aggregate(total=Sum("monto"))["total"] or Decimal("0.00")
+
+        if mes and anio:
+            try:
+                mes_int = int(mes)
+                anio_int = int(anio)
+                ventas_mes = Venta.objects.filter(
+                    fecha_venta__year=anio_int,
+                    fecha_venta__month=mes_int,
+                    estado=Venta.ESTADO_PAGADA
+                )
+                gastos_mes = Gasto.objects.filter(
+                    fecha__year=anio_int,
+                    fecha__month=mes_int
+                )
+                total_ventas_mes = ventas_mes.aggregate(total=Sum("total"))["total"] or Decimal("0.00")
+                total_gastos_mes = gastos_mes.aggregate(total=Sum("monto"))["total"] or Decimal("0.00")
+            except ValueError:
+                total_ventas_mes = Decimal("0.00")
+                total_gastos_mes = Decimal("0.00")
+        else:
+            total_ventas_mes = Decimal("0.00")
+            total_gastos_mes = Decimal("0.00")
+
+        return Response({
+            "fecha": fecha.strftime("%Y-%m-%d"),
+            "ventas_dia": VentaSerializer(ventas_dia, many=True).data,
+            "gastos_dia": GastoSerializer(gastos_dia, many=True).data,
+            "total_ventas_dia": total_ventas_dia,
+            "total_gastos_dia": total_gastos_dia,
+            "utilidad_dia": total_ventas_dia - total_gastos_dia,
+            "total_ventas_mes": total_ventas_mes,
+            "total_gastos_mes": total_gastos_mes,
+            "utilidad_mes": total_ventas_mes - total_gastos_mes,
+            "num_ventas_dia": ventas_dia.count(),
+        })

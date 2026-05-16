@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
-from .models import Compra, Categoria, DetalleCompra, DetalleVenta, ListaPrecio, ListaPrecioItem, Producto, Proveedor, TurnoCaja, Venta
+from .models import Compra, Categoria, DetalleCompra, DetalleVenta, Gasto, ListaPrecio, ListaPrecioItem, Producto, Proveedor, TurnoCaja, Venta
 from rest_framework import serializers
 from .models import Usuario
 Usuario = get_user_model()
@@ -362,3 +362,12 @@ class DashboardResumenSerializer(serializers.Serializer):
     total_ventas_hoy = serializers.DecimalField(max_digits=12, decimal_places=2)
     turnos_abiertos = serializers.IntegerField()
     compras_hoy = serializers.IntegerField()
+    weeklySales = serializers.ListField(child=serializers.DictField())
+    topProducts = serializers.ListField(child=serializers.DictField())
+
+
+class GastoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Gasto
+        fields = ["id", "fecha", "monto", "tipo", "descripcion", "created_at", "updated_at"]
+        read_only_fields = ["created_at", "updated_at"]

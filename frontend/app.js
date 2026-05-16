@@ -18,13 +18,15 @@ const data = {
   weeklySales: [],
   topProducts: [],
   dashboard: null,
+  reporte: null,
 };
 
 const defaultSettings = {
   darkMode: false,
   compactSidebar: false,
   reduceMotion: false,
-  accent: "#1d4ed8",
+  accent: "#dc2626",
+  fontSize: 14,
 };
 
 // Icon helpers returning compact SVGs for a cleaner, less "cartoon" look
@@ -43,7 +45,7 @@ function iconGear(){ return iconSvg('M19.14 12.94a7 7 0 0 0 0-1.88l2.03-1.58a.5.
 function iconArrow(){ return iconSvg('M12 2l-1.41 1.41L17.17 10H4v2h13.17l-6.58 6.59L12 22l10-10z'); }
 function iconLock(){ return iconSvg('M12 17a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm6-6h-1V9a5 5 0 0 0-10 0v2H6a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1z'); }
 function iconSearch(){ return iconSvg('M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79L20 21.5 21.5 20l-6-6z'); }
-function iconMoney(){ return iconSvg('M12 7a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm8 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z'); }
+function iconMoney(){ return iconSvg('M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm-5 4h10v2H7v-2zm3-4h4v2h-4V8z'); }
 function iconCube(){ return iconSvg('M12 2L3.5 7v10L12 22l8.5-5V7L12 2zm0 2.18L18.6 7 12 10.82 5.4 7 12 4.18z'); }
 function iconWarning(){ return iconSvg('M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z'); }
 function iconLogout(){ return iconSvg('M16 13v-2H7V8l-5 4 5 4v-3zM20 3h-8v2h8v14h-8v2h8a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z'); }
@@ -374,6 +376,7 @@ async function loadAllData() {
     }
 
     await loadDashboardData();
+    await loadReportData();
 
     console.log("Datos cargados:", data.cashiers.length, "cajeros,", data.products.length, "productos");
     loadAllDataInProgress = false;
@@ -386,10 +389,74 @@ async function loadAllData() {
 
 async function loadDashboardData() {
   try {
-    data.dashboard = await apiCall("/dashboard/");
+    const dashboardData = await apiCall("/dashboard/");
+    console.log("Dashboard loaded:", dashboardData);
+    data.dashboard = dashboardData;
+    data.weeklySales = dashboardData.weeklySales || [];
+    data.topProducts = dashboardData.topProducts || [];
   } catch (e) {
     console.error("Error loading dashboard:", e);
-    data.dashboard = null;
+    data.dashboard = { total_ventas_hoy: 0, ventas_hoy: 0, productos_stock_bajo: 0 };
+    data.weeklySales = [
+      { day: "Lun", value: 0 },
+      { day: "Mar", value: 0 },
+      { day: "Mié", value: 0 },
+      { day: "Jue", value: 0 },
+      { day: "Vie", value: 0 },
+      { day: "Sáb", value: 0 },
+      { day: "Dom", value: 0 }
+    ];
+    data.topProducts = [];
+  }
+}
+
+async function loadReportData(fecha = null) {
+  try {
+    let url = "/reportes/";
+    if (fecha) {
+      url += `?fecha=${fecha}`;
+    }
+    data.reporte = await apiCall(url);
+  } catch (e) {
+    console.error("Error loading report data:", e);
+    data.reporte = null;
+  }
+}
+
+async function createGasto(gastoData) {
+  try {
+    await apiCall("/gastos/", "POST", gastoData);
+    toast("Gasto registrado exitosamente", "success");
+    await loadReportData();
+    render();
+    return true;
+  } catch (e) {
+    toast(`Error: ${e.message}`, "danger");
+    return false;
+  }
+}
+
+async function viewSaleReceipt(saleId) {
+  try {
+    const venta = await apiCall(`/ventas/${saleId}/`);
+
+    const cartItems = (venta.detalles_detalle || []).map(d => ({
+      id: d.producto,
+      name: d.producto_nombre || "Producto",
+      qty: d.cantidad,
+      price: parseFloat(d.precio_unitario)
+    }));
+
+    const fakeVenta = {
+      numero_factura: venta.numero_factura,
+      medio_pago: venta.medio_pago,
+      monto_pagado: venta.monto_pagado,
+      total: venta.total
+    };
+
+    generateReceipt(fakeVenta, cartItems);
+  } catch (e) {
+    toast(`Error al obtener factura: ${e.message}`, "danger");
   }
 }
 
@@ -612,6 +679,9 @@ function applySettings() {
   document.body.classList.toggle("compact-sidebar", state.settings.compactSidebar);
   document.body.classList.toggle("reduce-motion", state.settings.reduceMotion);
   document.documentElement.style.setProperty("--accent", state.settings.accent);
+  if (state.settings.fontSize) {
+    document.body.style.fontSize = state.settings.fontSize + "px";
+  }
   // derive a secondary accent shade for subtle UI accents
   try {
     const accent2 = shadeHexColor(state.settings.accent, -12);
@@ -632,6 +702,7 @@ function getClockLabel() {
 }
 
 function render() {
+  try {
   const activeElement = document.activeElement;
   const activeId = activeElement?.id || activeElement?.dataset?.search;
   const activeValue = activeElement?.value || "";
@@ -664,6 +735,10 @@ function render() {
       }
     }
   }
+  } catch (err) {
+    console.error("Error en render:", err);
+    root.innerHTML = `<div style="padding:20px;color:red;">Error: ${err.message}</div>`;
+  }
 }
 
 function loginView() {
@@ -688,7 +763,7 @@ function loginView() {
               <input class="input" name="password" id="login-password" type="password" placeholder="Ingresa tu contraseña" autocomplete="current-password" />
             </div>
           </label>
-          <button class="button" type="submit">${iconArrow()} Iniciar Sesión</button>
+          <button class="button" type="submit">Iniciar Sesión</button>
         </form>
         <!-- Demo users removed -->
       </section>
@@ -732,7 +807,10 @@ function shellView() {
         </header>
         <main class="main"><div class="view">${renderView(state.activeView)}</div></main>
       </section>
-      <button class="floating-help" type="button" data-action="help">?</button>
+      <div class="accessibility-floating">
+        <button class="floating-btn" type="button" data-action="decrease-font" title="Reducir texto">A-</button>
+        <button class="floating-btn" type="button" data-action="increase-font" title="Aumentar texto">A+</button>
+      </div>
       <div class="toast-host" id="toast-host"></div>
       <div id="modal-container" class="modal-container ${state.showModal ? "show" : ""}">
         <div class="modal-backdrop"></div>
@@ -776,15 +854,24 @@ function dashboardView() {
   const d = data.dashboard || {};
   const ventasHoy = Number(d.total_ventas_hoy) || 0;
   const numVentas = Number(d.ventas_hoy) || 0;
-  const ticketPromedio = numVentas > 0 ? Math.round(ventasHoy / numVentas) : 0;
-
   const stats = [
     { label: "Ventas Hoy", value: ventasHoy, trend: `${numVentas} facturas`, icon: iconMoney(), tone: "" },
     { label: "Facturas", value: numVentas, trend: "Ventas realizadas", icon: iconCube(), tone: "purple" },
-    { label: "Ticket Promedio", value: ticketPromedio, trend: "Por factura", icon: iconMoney(), tone: "green" },
     { label: "Alertas Stock", value: d.productos_stock_bajo || 0, trend: "Productos con stock bajo", icon: iconWarning(), tone: "red" },
   ];
-  const lowStock = data.products.filter((item) => Number(item.stock_actual) <= Number(item.stock_minimo));
+
+  const weekly = (data.weeklySales || []).length > 0 ? data.weeklySales : [
+    { day: "Lun", value: 0 },
+    { day: "Mar", value: 0 },
+    { day: "Mié", value: 0 },
+    { day: "Jue", value: 0 },
+    { day: "Vie", value: 0 },
+    { day: "Sáb", value: 0 },
+    { day: "Dom", value: 0 }
+  ];
+  const topProd = (data.topProducts || []).length > 0 ? data.topProducts : [];
+  const maxValue = Math.max(...weekly.map(d => d.value), 1);
+  const lowStock = (data.products || []).filter((item) => Number(item.stock_actual) <= Number(item.stock_minimo));
 
   return `
     <section class="view dashboard-view">
@@ -794,7 +881,7 @@ function dashboardView() {
           <article class="panel stat-card">
             <div>
               <div class="label">${stat.label}</div>
-              <div class="value">${stat.value < 1000 ? formatNumber(stat.value) : formatCurrency(stat.value)}</div>
+              <div class="value">${formatNumber(Math.round(stat.value))}</div>
               <div class="trend">↗ ${stat.trend}</div>
             </div>
             <div class="stat-icon ${stat.tone}">${stat.icon}</div>
@@ -804,17 +891,21 @@ function dashboardView() {
       <div class="charts-grid">
         <section class="panel chart-card">
           <h3 class="chart-title">Ventas de la Semana</h3>
-          <div class="chart-stage">
+          <div class="chart-stage" id="bar-chart-container">
             <div class="bar-chart">
-              ${data.weeklySales.map((item, index) => {
-                const height = Math.max(24, (item.value / 10000) * 100);
-                return `
-                  <div class="bar-item" data-day="${item.day}" data-value="${item.value}" data-index="${index}">
-                    <button class="js-bar" type="button" style="height:${height}%"></button>
-                    <span class="bar-label">${item.day}</span>
-                  </div>
-                `;
-              }).join("")}
+              ${(() => {
+                const maxVal = Math.max(...weekly.map(d => d.value), 1);
+                const containerHeight = 200;
+                return weekly.map((item, index) => {
+                  const pxHeight = Math.max(10, Math.round((item.value / maxVal) * containerHeight));
+                  return `
+                    <div class="bar-item" data-day="${item.day}" data-value="${item.value}" data-index="${index}">
+                      <button class="js-bar" type="button" style="height:${pxHeight}px !important"></button>
+                      <span class="bar-label">${item.day}</span>
+                    </div>
+                  `;
+                }).join("");
+              })()}
             </div>
             <div class="chart-tooltip" id="bar-tooltip"></div>
           </div>
@@ -823,13 +914,13 @@ function dashboardView() {
           <h3 class="chart-title">Productos Más Vendidos</h3>
           <div class="pie-stage">
             <div class="pie-wrap">
-              <svg class="pie-svg" viewBox="0 0 100 100">${renderPieSlices(data.topProducts)}</svg>
+              <svg class="pie-svg" viewBox="0 0 100 100">${renderPieSlices(topProd)}</svg>
               <div class="chart-tooltip" id="pie-tooltip"></div>
             </div>
             <div class="pie-legend">
-              ${data.topProducts.map((item) => `
+              ${topProd.length > 0 ? topProd.map((item) => `
                 <div class="pie-legend-item"><span class="dot" style="background:${item.color}"></span><span>${item.label}</span><span style="color:${item.color}">${item.value}%</span></div>
-              `).join("")}
+              `).join("") : "<p style='color:#888;padding:20px;'>Sin datos de ventas</p>"}
             </div>
           </div>
         </section>
@@ -936,7 +1027,7 @@ function inventoryView() {
     ...(hasUncategorized ? ["Sin categoría"] : []),
   ];
   const uniqueCategories = ["all", ...new Set(categories.filter(Boolean).map((item) => String(item)))];
-  const rows = data.products.filter((product) => (!query || [product.nombre, product.codigo, getProductCategoryLabel(product)].some((value) => value && value.toLowerCase().includes(query))) && (category === "all" || (category === "Sin categoría" ? getProductCategoryLabel(product) === "Sin categoría" : getProductCategoryLabel(product) === category)));
+  const rows = data.products.filter((product) => product.activo !== false && (!query || [product.nombre, product.codigo, getProductCategoryLabel(product)].some((value) => value && value.toLowerCase().includes(query))) && (category === "all" || (category === "Sin categoría" ? getProductCategoryLabel(product) === "Sin categoría" : getProductCategoryLabel(product) === category)));
 
   return `
     <section class="view inventory-view">
@@ -1042,22 +1133,85 @@ function cashiersView() {
 }
 
 function reportsView() {
+  const reporte = data.reporte || {};
+  const fechaActual = reporte.fecha || new Date().toISOString().split('T')[0];
+
   return `
     <section class="view reports-view">
-      <div class="page-head"><div><h2>Reportes</h2><div class="eyebrow">${getCurrentDateLabel()}</div></div></div>
-      <section class="panel placeholder-panel"><h3>Reportes y Análisis</h3><p class="subtle-text">Sección de reportes en desarrollo...</p></section>
+      <div class="page-head">
+        <div><h2>Reportes</h2><div class="eyebrow">Gestión de ventas y gastos</div></div>
+        <div class="section-actions">
+          <button class="button" type="button" data-action="new-expense">+ Gasto</button>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <div class="fecha-selector">
+          <label>Fecha:</label>
+          <input type="date" id="reporte-fecha" value="${fechaActual}" class="fecha-input" />
+          <button class="button" type="button" data-action="buscar-reporte">Buscar</button>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <article class="panel stat-card">
+          <div><div class="label">Ventas del Día</div><div class="value">${formatCurrency(reporte.total_ventas_dia || 0)}</div><div class="trend">${reporte.num_ventas_dia || 0} ventas</div></div>
+          <div class="stat-icon green">${iconMoney()}</div>
+        </article>
+        <article class="panel stat-card">
+          <div><div class="label">Gastos del Día</div><div class="value">${formatCurrency(reporte.total_gastos_dia || 0)}</div><div class="trend">${(reporte.gastos_dia || []).length} gastos</div></div>
+          <div class="stat-icon red">${iconWarning()}</div>
+        </article>
+        <article class="panel stat-card">
+          <div><div class="label">Utilidad del Día</div><div class="value ${(reporte.utilidad_dia || 0) >= 0 ? 'pos' : 'neg'}">${formatCurrency(reporte.utilidad_dia || 0)}</div><div class="trend">Ventas - Gastos</div></div>
+          <div class="stat-icon ${(reporte.utilidad_dia || 0) >= 0 ? 'green' : 'red'}">${iconChart()}</div>
+        </article>
+      </div>
+
+      <div class="reports-grid">
+        <section class="panel">
+          <h3>Ventas del Día</h3>
+          <div class="table-responsive">
+            <table>
+              <thead><tr><th>Factura</th><th>Total</th><th>Método</th></tr></thead>
+              <tbody>
+                ${(reporte.ventas_dia || []).map(v => `<tr><td>${v.numero_factura || 'N/A'}</td><td>${formatCurrency(v.total)}</td><td><span class="chip">${v.medio_pago || 'efectivo'}</span></td><td><button class="button small" type="button" data-action="view-sale" data-id="${v.id}">Ver</button></td></tr>`).join("") || '<tr><td colspan="4">Sin ventas</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel">
+          <h3>Gastos del Día</h3>
+          <div class="table-responsive">
+            <table>
+              <thead><tr><th>Tipo</th><th>Monto</th><th>Descripción</th></tr></thead>
+              <tbody>
+                ${(reporte.gastos_dia || []).map(g => `<tr><td><span class="chip">${g.tipo}</span></td><td>${formatCurrency(g.monto)}</td><td>${g.descripcion || '-'}</td></tr>`).join("") || '<tr><td colspan="3">Sin gastos</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <section class="panel month-summary">
+        <h3>Resumen del Mes</h3>
+        <div class="month-stats">
+          <div class="month-stat"><div class="label">Ventas</div><div class="value">${formatCurrency(reporte.total_ventas_mes || 0)}</div></div>
+          <div class="month-stat"><div class="label">Gastos</div><div class="value gasto">${formatCurrency(reporte.total_gastos_mes || 0)}</div></div>
+          <div class="month-stat"><div class="label">Utilidad</div><div class="value ${(reporte.utilidad_mes || 0) >= 0 ? 'pos' : 'neg'}">${formatCurrency(reporte.utilidad_mes || 0)}</div></div>
+        </div>
+      </section>
     </section>
   `;
 }
 
 function settingsView() {
-  const accents = ["#1d4ed8", "#7c3aed", "#10b981", "#f59e0b", "#ef4444"];
   return `
     <section class="view settings-view">
       <div class="page-head"><div><h2>Configuración</h2><div class="eyebrow">${getCurrentDateLabel()}</div></div></div>
       <div class="settings-layout">
         <section class="settings-grid">
-          <div class="panel settings-card"><h3>Configuración del Sistema</h3><p class="subtle-text">Sección de configuración visual para adaptar la experiencia del panel.</p></div>
+          <div class="panel settings-card"><h3>Configuración del Sistema</h3><p class="subtle-text">Personaliza la experiencia del panel.</p></div>
           ${[
             { label: "Modo oscuro", key: "darkMode", description: "Cambia entre una interfaz clara y una oscura." },
             { label: "Sidebar compacta", key: "compactSidebar", description: "Reduce el ancho de la barra lateral." },
@@ -1068,12 +1222,13 @@ function settingsView() {
               <label class="switch"><input type="checkbox" data-setting="${option.key}" ${state.settings[option.key] ? "checked" : ""}><span class="slider"></span></label>
             </article>
           `).join("")}
-          <article class="panel pad"><h4 style="margin-bottom:12px;">Color principal</h4><div class="accent-picks">${accents.map((accent) => `<button class="accent-pick ${state.settings.accent === accent ? "active" : ""}" type="button" data-action="accent" data-accent="${accent}" style="background:${accent}"></button>`).join("")}</div></article>
         </section>
         <aside class="panel settings-preview">
-          <h3>Vista previa</h3>
-          <div class="preview-card"><strong>VentaPro</strong><p class="subtle-text" style="margin:8px 0 0;">El tema, los colores y la densidad visual se guardan en el navegador.</p></div>
-          <div class="preview-card"><strong>${state.session.role === "admin" ? "Administrador" : "Cajero"}</strong><p class="subtle-text" style="margin:8px 0 0;">La vista activa y los ajustes continúan después de recargar.</p></div>
+          <h3>Accesibilidad</h3>
+          <div class="accessibility-controls">
+            <button class="button" type="button" data-action="decrease-font">A-</button>
+            <button class="button" type="button" data-action="increase-font">A+</button>
+          </div>
         </aside>
       </div>
     </section>
@@ -1096,16 +1251,7 @@ function renderPieSlices(items) {
 function wireCharts() {
   const barTooltip = document.getElementById("bar-tooltip");
   const pieTooltip = document.getElementById("pie-tooltip");
-  const barChart = document.querySelector('.bar-chart');
-  const containerH = barChart ? barChart.clientHeight : 240;
   document.querySelectorAll(".bar-item").forEach((item) => {
-    // compute bar height in px based on container height so percentages render consistently
-    const btn = item.querySelector('.js-bar');
-    if (btn) {
-      const val = Number(item.dataset.value) || 0;
-      const px = Math.max(24, Math.round((val / 10000) * containerH));
-      btn.style.height = px + 'px';
-    }
     item.classList.add("ready");
     item.addEventListener("mouseenter", (event) => {
       item.classList.add("active");
@@ -1159,12 +1305,18 @@ function handleClick(event) {
       logout();
       break;
     case "help":
-      toast("La ayuda puede enlazarse aquí a una guía visual o soporte.", "warning");
       break;
-    case "accent":
-      state.settings.accent = target.dataset.accent;
+    case "increase-font":
+      state.settings.fontSize = (state.settings.fontSize || 14) + 2;
+      if (state.settings.fontSize > 24) state.settings.fontSize = 24;
+      document.body.style.fontSize = state.settings.fontSize + "px";
       saveSettings();
-      render();
+      break;
+    case "decrease-font":
+      state.settings.fontSize = (state.settings.fontSize || 14) - 2;
+      if (state.settings.fontSize < 10) state.settings.fontSize = 10;
+      document.body.style.fontSize = state.settings.fontSize + "px";
+      saveSettings();
       break;
     case "add-to-cart":
       addToCart(target.dataset.id);
@@ -1225,6 +1377,21 @@ function handleClick(event) {
       break;
     case "download-template":
       downloadTemplate();
+      break;
+    case "new-expense":
+      showModal(formNewExpense());
+      break;
+    case "buscar-reporte":
+      const fechaInput = document.getElementById("reporte-fecha");
+      if (fechaInput) {
+        loadReportData(fechaInput.value).then(() => render());
+      }
+      break;
+    case "view-sale":
+      viewSaleReceipt(target.dataset.id);
+      break;
+    case "confirm-delete-prod":
+      confirmDeleteProduct(target.dataset.id);
       break;
     default:
       if (target.dataset.action?.startsWith("edit-") || target.dataset.action?.startsWith("delete-") || target.dataset.action === "view-order") {
@@ -1381,6 +1548,17 @@ function handleSubmit(event) {
     handleBulkUpload(event);
     return;
   }
+
+  if (event.target.id === "form-new-expense") {
+    const formData = new FormData(event.target);
+    const gastoData = {
+      monto: parseFloat(formData.get("monto")),
+      tipo: formData.get("tipo"),
+      descripcion: formData.get("descripcion") || "",
+    };
+    createGasto(gastoData).then(() => closeModal());
+    return;
+  }
 }
 
 function handleInput(event) {
@@ -1405,6 +1583,7 @@ function handleInput(event) {
         target.value = "";
         state.search.pos = "";
         toast(`Agregado: ${product.nombre}`, "success");
+        target.focus();
       }
     }
   } else if (target.matches("[data-search='inventory']")) {
@@ -1773,18 +1952,40 @@ async function editProduct(productId) {
   showModal(formEditProduct(product));
 }
 
-async function deleteProduct(productId) {
+function deleteProduct(productId) {
   const product = data.products.find((item) => String(item.id) === String(productId));
   if (!product) return;
-  if (!(await modalConfirm(`¿Desactivar producto ${product.nombre}?`))) return;
-  try {
-    await apiCall(`/productos/${productId}/`, "PATCH", { activo: false });
-    await loadAllData();
-    toast("Producto desactivado.", "success");
-    render();
-  } catch (e) {
-    toast(`Error: ${e.message}`, "danger");
-  }
+
+  showModal(`
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h2>Confirmar eliminación</h2>
+        <button class="modal-close" type="button" data-action="modal-close">×</button>
+      </div>
+      <div class="modal-form" style="padding:20px">
+        <p style="margin-bottom:16px;">¿Estás seguro de eliminar el producto <strong>${product.nombre}</strong>?</p>
+        <p style="color:var(--danger);font-size:12px;margin-bottom:16px;">Esta acción no se puede deshacer.</p>
+        <div class="form-actions" style="display:flex;gap:10px;">
+          <button class="button danger" type="button" data-action="confirm-delete-prod" data-id="${productId}">Sí, eliminar</button>
+          <button class="button ghost" type="button" data-action="modal-close">Cancelar</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+
+function confirmDeleteProduct(productId) {
+  apiCall(`/productos/${productId}/`, "DELETE")
+    .then(() => {
+      closeModal();
+      loadAllData().then(() => {
+        toast("Producto eliminado.", "success");
+        render();
+      });
+    })
+    .catch((e) => {
+      toast(`Error: ${e.message}`, "danger");
+    });
 }
 
 async function editSupplier(supplierId) {
@@ -2175,6 +2376,38 @@ function formNewSupplier() {
         </div>
         <div class="form-actions">
           <button class="button" type="submit">Crear Proveedor</button>
+          <button class="button ghost" type="button" data-action="modal-close">Cancelar</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+function formNewExpense() {
+  const tipos = ["electricidad", "agua", "internet", "alquiler", "sueldo", "mantenimiento", "insumos", "otro"];
+  return `
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h2>Registrar Gasto</h2>
+        <button class="modal-close" type="button" data-action="modal-close">×</button>
+      </div>
+      <form id="form-new-expense" class="modal-form">
+        <div class="form-group">
+          <label>Tipo de Gasto</label>
+          <select class="input" name="tipo" required>
+            ${tipos.map(t => `<option value="${t}">${t.charAt(0).toUpperCase() + t.slice(1)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Monto</label>
+          <input class="input" name="monto" type="number" step="0.01" min="0" required />
+        </div>
+        <div class="form-group">
+          <label>Descripción</label>
+          <textarea class="input" name="descripcion" rows="2"></textarea>
+        </div>
+        <div class="form-actions">
+          <button class="button" type="submit">Registrar Gasto</button>
           <button class="button ghost" type="button" data-action="modal-close">Cancelar</button>
         </div>
       </form>
