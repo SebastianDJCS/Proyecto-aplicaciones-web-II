@@ -8,6 +8,11 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.views import APIView
+
+import pandas as pd
+import io
 
 from .models import Compra, Categoria, DetalleCompra, ListaPrecio, ListaPrecioItem, Producto, Proveedor, TurnoCaja, Usuario, Venta, EstadoSync, ROL_ADMINISTRADOR
 from .permissions import IsAdministrador, IsAdministradorOReadOnly, IsAdministradorOVendedor
@@ -43,6 +48,22 @@ class UsuarioViewSet(viewsets.ModelViewSet): # Cambia temporalmente la herencia 
         """Devuelve los datos del usuario autenticado (ruta: /usuarios/me/)."""
         serializer = self.get_serializer(request.user)
         return Response(serializer.data)
+
+    @action(detail=False, methods=["post"], permission_classes=[IsAuthenticated])
+    def login_status(self, request):
+        """Actualiza el estado de sesión del usuario."""
+        usuario = request.user
+        usuario.is_logged_in = True
+        usuario.save(update_fields=["is_logged_in"])
+        return Response({"status": "logged_in", "is_logged_in": True})
+
+    @action(detail=False, methods=["post"], permission_classes=[IsAuthenticated])
+    def logout_status(self, request):
+        """Marca al usuario como desconectado."""
+        usuario = request.user
+        usuario.is_logged_in = False
+        usuario.save(update_fields=["is_logged_in"])
+        return Response({"status": "logged_out", "is_logged_in": False})
 
 class ProveedorViewSet(viewsets.ModelViewSet):
     queryset = Proveedor.objects.all().order_by("nombre")
@@ -289,3 +310,103 @@ class SyncViewSet(viewsets.ViewSet):
             saved.save(update_fields=["estado_sync", "updated_at"])
             results.append(str(saved.id))
         return results
+
+
+class ImportarProductosView(APIView):
+    permission_classes = [IsAdministrador]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        archivo = request.FILES.get("archivo")
+        modo = request.data.get("modo", "importar")  # "preview" o "importar"
+
+        if not archivo:
+            return Response({"error": "No se proporcionó archivo"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            if archivo.name.endswith(".csv"):
+                df = pd.read_csv(io.BytesIO(archivo.read()), encoding="utf-8")
+            else:
+                df = pd.read_excel(io.BytesIO(archivo.read()))
+        except Exception as e:
+            return Response({"error": f"Error al leer archivo: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        columnas_requeridas = ["codigo", "nombre", "precio_venta"]
+        columnas_faltantes = [col for col in columnas_requeridas if col not in df.columns]
+        if columnas_faltantes:
+            return Response({"error": f"Columnas faltantes: {columnas_faltantes}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        resultados = []
+        errores = []
+
+        for idx, row in df.iterrows():
+            try:
+                codigo = str(row.get("codigo", "")).strip()
+                nombre = str(row.get("nombre", "")).strip()
+                if not codigo or not nombre:
+                    errores.append({"fila": idx + 2, "error": "Código o nombre vacío"})
+                    continue
+
+                precio_venta = self._parse_decimal(row.get("precio_venta", 0))
+                costo = self._parse_decimal(row.get("costo", 0))
+                stock_actual = int(row.get("stock_actual", 0)) if pd.notna(row.get("stock_actual")) else 0
+                stock_minimo = int(row.get("stock_minimo", 0)) if pd.notna(row.get("stock_minimo")) else 0
+                descripcion = str(row.get("descripcion", "")) if pd.notna(row.get("descripcion")) else ""
+                codigo_barras = str(row.get("codigo_barras", "")) if pd.notna(row.get("codigo_barras")) else ""
+
+                resultado = {
+                    "fila": idx + 2,
+                    "codigo": codigo,
+                    "nombre": nombre,
+                    "precio_venta": float(precio_venta),
+                    "costo": float(costo),
+                    "stock_actual": stock_actual,
+                    "stock_minimo": stock_minimo,
+                    "descripcion": descripcion,
+                    "codigo_barras": codigo_barras,
+                }
+
+                if modo == "preview":
+                    producto_existente = Producto.objects.filter(codigo=codigo).first()
+                    resultado["accion"] = "crear" if not producto_existente else "actualizar"
+                    resultado["existe"] = producto_existente is not None
+                    resultados.append(resultado)
+                else:
+                    producto, created = Producto.objects.update_or_create(
+                        codigo=codigo,
+                        defaults={
+                            "nombre": nombre,
+                            "precio_venta": precio_venta,
+                            "costo": costo,
+                            "stock_actual": stock_actual,
+                            "stock_minimo": stock_minimo,
+                            "descripcion": descripcion,
+                            "codigo_barras": codigo_barras,
+                            "estado_sync": EstadoSync.PENDIENTE
+                        }
+                    )
+                    resultados.append({
+                        "fila": idx + 2,
+                        "codigo": codigo,
+                        "nombre": nombre,
+                        "accion": "creado" if created else "actualizado",
+                        "id": str(producto.id)
+                    })
+
+            except Exception as e:
+                errores.append({"fila": idx + 2, "error": str(e)})
+
+        return Response({
+            "total_filas": len(df),
+            "procesados": len(resultados),
+            "errores": errores,
+            "resultados": resultados[:50] if modo == "preview" else resultados
+        })
+
+    def _parse_decimal(self, value):
+        if pd.isna(value):
+            return Decimal("0.00")
+        try:
+            return Decimal(str(value).replace(",", "."))
+        except:
+            return Decimal("0.00")

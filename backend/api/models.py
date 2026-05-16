@@ -39,15 +39,15 @@ ROL_CHOICES = [
 
 # 2. Ahora define la clase Usuario
 class Usuario(AbstractUser):
-    # Campos que ya tenías
     telefono = models.CharField(max_length=15, blank=True, null=True)
-    
-    # Aquí ya no dará error porque ROL_CHOICES ya existe arriba
+
     rol = models.CharField(
-        max_length=20, 
-        choices=ROL_CHOICES, 
+        max_length=20,
+        choices=ROL_CHOICES,
         default=ROL_VENDEDOR
     )
+
+    is_logged_in = models.BooleanField(default=False)
 
     # Recuerda mantener los related_name para evitar el error previo
     groups = models.ManyToManyField(

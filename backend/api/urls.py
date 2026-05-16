@@ -7,6 +7,7 @@ from .views import (
     CategoriaViewSet,
     DashboardViewSet,
     DetalleCompraViewSet,
+    ImportarProductosView,
     ListaPrecioItemViewSet,
     ListaPrecioViewSet,
     ProductoViewSet,
@@ -32,6 +33,7 @@ router.register("dashboard", DashboardViewSet, basename="dashboard")
 router.register("sync", SyncViewSet, basename="sync")
 
 urlpatterns = [
+    path("productos/importar/", ImportarProductosView.as_view(), name="importar-productos"),
     path("", include(router.urls)),
     path("auth/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("auth/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),

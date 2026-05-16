@@ -2,6 +2,7 @@ const STORAGE_KEYS = {
   session: "ventapro-session",
   settings: "ventapro-settings",
   appVersion: "ventapro-app-version",
+  offlineData: "ventapro-offline-data",
 };
 
 const APP_VERSION = "2026-05-15-2";
@@ -159,11 +160,15 @@ root.addEventListener("click", handleClick);
 root.addEventListener("submit", handleSubmit);
 root.addEventListener("input", handleInput);
 root.addEventListener("change", handleChange);
-window.addEventListener("online", updateSyncBadge);
+window.addEventListener("online", () => {
+  updateSyncBadge();
+  syncOfflineSales();
+});
 window.addEventListener("offline", updateSyncBadge);
 
 render();
 setInterval(updateSyncBadge, 1000);
+loadOfflineData();
 ensureFreshApp().then(() => bootstrapStoredSession());
 
 function loadSession() {
@@ -243,12 +248,19 @@ function stopLiveSync() {
 }
 
 // === API WRAPPER ===
-async function apiCall(endpoint, method = "GET", body = null) {
-  const headers = { "Content-Type": "application/json" };
+async function apiCall(endpoint, method = "GET", body = null, isFormData = false) {
+  const headers = {};
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
-  
+
   const options = { method, headers };
-  if (body) options.body = JSON.stringify(body);
+  if (body) {
+    if (isFormData) {
+      options.body = body;
+    } else {
+      headers["Content-Type"] = "application/json";
+      options.body = JSON.stringify(body);
+    }
+  }
   
   try {
     const response = await fetch(`${API_BASE}${endpoint}`, options);
@@ -452,33 +464,78 @@ async function createSupplier(supplierData) {
 
 async function createSale(saleData) {
   stopLiveSync();
-  try {
-    const res = await apiCall("/ventas/", "POST", saleData);
-    await loadAllData();
-    toast(`Venta registrada: ${res.numero_factura}`, "success");
-    generateReceipt(res, state.cart);
+
+  if (navigator.onLine) {
+    try {
+      const res = await apiCall("/ventas/", "POST", saleData);
+      await loadAllData();
+      toast(`Venta registrada: ${res.numero_factura}`, "success");
+      generateReceipt(res, state.cart);
+      state.cart = [];
+      state.cashReceived = "";
+      startLiveSync();
+      return true;
+    } catch (e) {
+      toast(`Error registrando venta: ${e.message}`, "danger");
+      startLiveSync();
+      return false;
+    }
+  } else {
+    // Modo offline: guardar venta localmente
+    const offlineSale = {
+      id: "offline-" + Date.now(),
+      ...saleData,
+      fecha_venta: new Date().toISOString(),
+      numero_factura: "PENDIENTE-" + Date.now(),
+      estado: "pendiente_sync",
+      detalles: saleData.detalles
+    };
+
+    if (!data.offlineSales) data.offlineSales = [];
+    data.offlineSales.push(offlineSale);
+    saveToLocalStorage();
+
+    // Generar recibo local
+    generateReceipt(offlineSale, state.cart);
+
+    toast("Venta guardada offline. Se sincronizará cuando haya conexión.", "warning");
     state.cart = [];
     state.cashReceived = "";
     startLiveSync();
     return true;
-  } catch (e) {
-    toast(`Error registrando venta: ${e.message}`, "danger");
-    startLiveSync();
-    return false;
   }
 }
 
 async function getOrCreateTurnoCaja() {
-  try {
-    const turnos = await apiCall("/cajeros/");
-    const openTurno = turnos.find(t => t.estado === "abierto");
-    if (openTurno) return openTurno.id;
-    const newTurno = await apiCall("/cajeros/", "POST", { monto_apertura: 0 });
-    return newTurno.id;
-  } catch (e) {
-    console.error("Error getting turno:", e);
-    return null;
+  if (navigator.onLine) {
+    try {
+      const turnos = await apiCall("/cajeros/");
+      const openTurno = turnos.find(t => t.estado === "abierto");
+      if (openTurno) return openTurno.id;
+      const newTurno = await apiCall("/cajeros/", "POST", { monto_apertura: 0 });
+      return newTurno.id;
+    } catch (e) {
+      console.error("Error getting turno online:", e);
+    }
   }
+  // Modo offline: buscar turno abierto en datos locales
+  const localTurno = data.cashiers?.find(t => t.estado === "abierto");
+  if (localTurno) return localTurno.id;
+
+  // Si no hay turno abierto offline, crear uno local temporal
+  const tempTurnoId = "temp-" + Date.now();
+  if (!data.localTurnos) data.localTurnos = [];
+  const existingTemp = data.localTurnos.find(t => t.id === tempTurnoId && t.estado === "abierto");
+  if (existingTemp) return existingTemp.id;
+
+  data.localTurnos.push({
+    id: tempTurnoId,
+    estado: "abierto",
+    monto_apertura: 0,
+    created_at: new Date().toISOString()
+  });
+  saveToLocalStorage();
+  return tempTurnoId;
 }
 
 function loadSettings() {
@@ -486,6 +543,63 @@ function loadSettings() {
     return { ...defaultSettings, ...(JSON.parse(localStorage.getItem(STORAGE_KEYS.settings) || "null") || {}) };
   } catch {
     return { ...defaultSettings };
+  }
+}
+
+function saveToLocalStorage() {
+  const offlineData = {
+    localTurnos: data.localTurnos || [],
+    offlineSales: data.offlineSales || []
+  };
+  localStorage.setItem(STORAGE_KEYS.offlineData, JSON.stringify(offlineData));
+}
+
+function loadOfflineData() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.offlineData) || "null");
+    if (stored) {
+      data.localTurnos = stored.localTurnos || [];
+      data.offlineSales = stored.offlineSales || [];
+    }
+  } catch (e) {
+    console.error("Error loading offline data:", e);
+  }
+}
+
+async function syncOfflineSales() {
+  if (!data.offlineSales || data.offlineSales.length === 0) return;
+
+  toast(`Sincronizando ${data.offlineSales.length} ventas offline...`, "info");
+
+  const syncedIds = [];
+
+  for (const sale of data.offlineSales) {
+    try {
+      // Obtener un turno de caja válido
+      const turnoId = await getOrCreateTurnoCaja();
+      if (!turnoId) continue;
+
+      const saleData = {
+        turno_caja: turnoId,
+        medio_pago: sale.medio_pago || "efectivo",
+        monto_pagado: sale.monto_pagado || sale.total,
+        detalles: sale.detalles
+      };
+
+      const result = await apiCall("/ventas/", "POST", saleData);
+      syncedIds.push(sale.id);
+      toast(`Venta ${result.numero_factura} sincronizada`, "success");
+    } catch (e) {
+      console.error("Error sincronizando venta:", e);
+    }
+  }
+
+  // Eliminar ventas sincronizadas
+  data.offlineSales = data.offlineSales.filter(s => !syncedIds.includes(s.id));
+  saveToLocalStorage();
+
+  if (syncedIds.length > 0) {
+    await loadAllData();
   }
 }
 
@@ -895,19 +1009,19 @@ function cashiersView() {
   const query = state.search.cashier.trim().toLowerCase();
   const cashiers = data.cashiers.filter((c) => !query || [c.first_name, c.last_name, c.username, c.telefono].some((v) => v && v.toLowerCase().includes(query)));
   const total = data.cashiers.length;
-  const active = data.cashiers.filter((c) => c.is_active !== false).length;
+  const active = data.cashiers.filter((c) => c.is_logged_in === true).length;
 
   return `
     <section class="view cashiers-view">
       <div class="page-head">
-        <div><h2>Cajeros</h2><div class="eyebrow">Total: ${total} | Activos: ${active}</div></div>
+        <div><h2>Cajeros</h2><div class="eyebrow">Total: ${total} | Conectados: ${active}</div></div>
         <div class="section-actions"><button class="button" type="button" data-action="new-cashier">Nuevo Cajero</button></div>
       </div>
       <section class="panel cashiers-table">
         <div class="toolbar" style="margin-bottom:14px;"><div class="search-wrap"><span class="search-icon">${iconSearch()}</span><input class="search-input" data-search="cashier" type="text" placeholder="Buscar cajeros..." value="${escapeAttr(state.search.cashier)}" /></div></div>
         <div class="table-responsive">
           <table>
-            <thead><tr><th>Cajero</th><th>Usuario</th><th>Contacto</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead>
+            <thead><tr><th>Cajero</th><th>Usuario</th><th>Contacto</th><th>Rol</th><th>Sesión</th><th>Acciones</th></tr></thead>
             <tbody>
               ${cashiers.map((cashier) => `
                 <tr>
@@ -915,7 +1029,7 @@ function cashiersView() {
                   <td><span class="chip neutral">${cashier.username}</span></td>
                   <td>${cashier.telefono || "Sin teléfono"}</td>
                   <td><span class="chip">${cashier.rol}</span></td>
-                  <td><span class="chip ${(cashier.is_active !== false) ? "success" : "danger"}">${(cashier.is_active !== false) ? "Activo" : "Inactivo"}</span></td>
+                  <td><span class="chip ${cashier.is_logged_in === true ? "success" : "danger"}">${cashier.is_logged_in === true ? "Conectado" : "Desconectado"}</span></td>
                   <td><div class="action-icons"><button class="icon-btn" type="button" data-action="edit-cashier" data-id="${cashier.id}">✎</button><button class="icon-btn danger" type="button" data-action="delete-cashier" data-id="${cashier.id}">🗑</button></div></td>
                 </tr>
               `).join("")}
@@ -1086,7 +1200,7 @@ function handleClick(event) {
       showModal(formNewSupplier());
       break;
     case "bulk-upload":
-      toast("Carga masiva disponible para importación de productos.", "warning");
+      showModal(bulkUploadModal());
       break;
     case "edit-product":
       editProduct(target.dataset.id);
@@ -1105,6 +1219,12 @@ function handleClick(event) {
       break;
     case "delete-cashier":
       deleteCashier(target.dataset.id);
+      break;
+    case "confirm-bulk-import":
+      confirmBulkImport();
+      break;
+    case "download-template":
+      downloadTemplate();
       break;
     default:
       if (target.dataset.action?.startsWith("edit-") || target.dataset.action?.startsWith("delete-") || target.dataset.action === "view-order") {
@@ -1256,17 +1376,37 @@ function handleSubmit(event) {
     closeModal();
     return;
   }
+
+  if (event.target.id === "bulk-upload-form") {
+    handleBulkUpload(event);
+    return;
+  }
 }
 
 function handleInput(event) {
   const { target } = event;
   const isSearchInput = target.matches("[data-search]") || target.matches(".search-input");
   const isPaymentField = target.matches("[data-payment-field='cash']");
-  
+
   if (!isSearchInput && !isPaymentField) return;
-  
+
   if (target.matches("[data-search='pos']")) {
     state.search.pos = target.value;
+
+    // Auto-agregar por código numérico
+    const searchValue = target.value.trim();
+    if (/^\d+$/.test(searchValue) && searchValue.length >= 2) {
+      const product = data.products.find(p =>
+        p.codigo === searchValue ||
+        p.codigo_barras === searchValue
+      );
+      if (product) {
+        addToCart(product.id);
+        target.value = "";
+        state.search.pos = "";
+        toast(`Agregado: ${product.nombre}`, "success");
+      }
+    }
   } else if (target.matches("[data-search='inventory']")) {
     state.search.inventory = target.value;
   } else if (target.matches("[data-search='supplier']")) {
@@ -1309,18 +1449,29 @@ function login(username, password) {
       state.session = { username, name: me ? `${me.first_name} ${me.last_name}` : username, role, initials: username.substring(0, 1).toUpperCase() };
       state.activeView = role === "cashier" ? "point-of-sale" : "dashboard";
       saveSession({ ...state.session, token: state.token, refresh: state.refresh });
+
+      // Marcar usuario como logueado en el backend
+      await apiCall("/usuarios/login_status/", "POST").catch(() => {});
+
+      // Recargar lista de cajeros para ver el estado actualizado
+      data.cashiers = await apiCall("/usuarios/").catch(() => data.cashiers);
+
       toast(`Bienvenido, ${state.session.name}.`, "success");
       render();
       return;
     }
-    
+
     // Si neither worked
     toast("Credenciales inválidas. Usa admin / admin123", "danger");
     render();
   });
 }
 
-function logout() {
+async function logout() {
+  // Marcar usuario como desconectado en el backend
+  if (state.token) {
+    await apiCall("/usuarios/logout_status/", "POST").catch(() => {});
+  }
   stopLiveSync();
   state.authenticated = false;
   state.session = null;
@@ -1443,6 +1594,152 @@ function modalConfirmHtml(message) {
       </div>
     </div>
   `;
+}
+
+function bulkUploadModal() {
+  return `
+    <div class="modal-dialog" style="max-width:600px;">
+      <div class="modal-header">
+        <h2>Carga Masiva de Productos</h2>
+        <button class="modal-close" type="button" data-action="modal-close">×</button>
+      </div>
+      <div class="modal-form" style="padding:16px">
+        <div style="margin-bottom:16px;">
+          <p style="margin-bottom:12px;"><strong>Formato del archivo:</strong></p>
+          <p style="font-size:12px;color:#666;">El archivo debe ser CSV o Excel (.xlsx) con las siguientes columnas:</p>
+          <ul style="font-size:12px;color:#666;margin:8px 0 16px 20px;">
+            <li><code>codigo</code> - Código único del producto (obligatorio)</li>
+            <li><code>nombre</code> - Nombre del producto (obligatorio)</li>
+            <li><code>precio_venta</code> - Precio de venta (obligatorio)</li>
+            <li><code>costo</code> - Costo del producto (opcional)</li>
+            <li><code>stock_actual</code> - Stock actual (opcional)</li>
+            <li><code>stock_minimo</code> - Stock mínimo (opcional)</li>
+            <li><code>descripcion</code> - Descripción (opcional)</li>
+            <li><code>codigo_barras</code> - Código de barras (opcional)</li>
+          </ul>
+          <button class="button ghost" type="button" data-action="download-template">Descargar Plantilla</button>
+        </div>
+        <form id="bulk-upload-form" enctype="multipart/form-data">
+          <div class="form-group">
+            <label class="field-label">Seleccionar archivo (CSV o XLSX)</label>
+            <input type="file" name="archivo" id="bulk-file" accept=".csv,.xlsx,.xls" required style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;" />
+          </div>
+          <div class="form-actions">
+            <button class="button" type="submit">Vista Previa</button>
+            <button class="button ghost" type="button" data-action="modal-close">Cancelar</button>
+          </div>
+        </form>
+        <div id="bulk-preview-container" style="display:none;margin-top:16px;">
+          <h4 style="margin-bottom:8px;">Vista Previa</h4>
+          <div id="bulk-preview-results" style="max-height:300px;overflow-y:auto;font-size:12px;"></div>
+          <div class="form-actions" style="margin-top:16px;">
+            <button class="button" type="button" data-action="confirm-bulk-import">Confirmar Importación</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+let bulkFileData = null;
+
+async function handleBulkUpload(event) {
+  event.preventDefault();
+  const fileInput = document.getElementById("bulk-file");
+  const file = fileInput.files[0];
+  if (!file) {
+    toast("Selecciona un archivo", "warning");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("archivo", file);
+  formData.append("modo", "preview");
+
+  try {
+    toast("Procesando archivo...", "info");
+    const result = await apiCall("/productos/importar/", "POST", formData, true);
+    bulkFileData = result;
+
+    const container = document.getElementById("bulk-preview-container");
+    const resultsDiv = document.getElementById("bulk-preview-results");
+    container.style.display = "block";
+
+    let html = `<p><strong>Total filas:</strong> ${result.total_filas} | <strong>Procesados:</strong> ${result.procesados} | <strong>Errores:</strong> ${result.errores?.length || 0}</p>`;
+
+    if (result.errores && result.errores.length > 0) {
+      html += `<div style="color:red;margin-bottom:8px;"><strong>Errores:</strong><ul>${result.errores.map(e => `<li>Fila ${e.fila}: ${e.error}</li>`).join("")}</ul></div>`;
+    }
+
+    html += `<table style="width:100%;border-collapse:collapse;font-size:11px;">
+      <thead><tr style="background:#f0f0f0;"><th>Código</th><th>Nombre</th><th>Precio</th><th>Stock</th><th>Acción</th></tr></thead>
+      <tbody>`;
+
+    result.resultados.forEach(r => {
+      const rowStyle = r.existe ? "background:#fff8e1;" : "";
+      html += `<tr style="${rowStyle}">
+        <td>${escapeHtml(r.codigo)}</td>
+        <td>${escapeHtml(r.nombre)}</td>
+        <td>${formatCurrency(r.precio_venta)}</td>
+        <td>${r.stock_actual}</td>
+        <td>${r.existe ? '<span class="chip warning">Actualizar</span>' : '<span class="chip success">Crear</span>'}</td>
+      </tr>`;
+    });
+
+    html += "</tbody></table>";
+    if (result.total_filas > 50) {
+      html += `<p style="margin-top:8px;color:#666;">Mostrando primeros 50 de ${result.total_filas} filas</p>`;
+    }
+
+    resultsDiv.innerHTML = html;
+    toast("Preview cargado. Revisa los datos y confirma.", "success");
+  } catch (e) {
+    toast(`Error: ${e.message}`, "danger");
+  }
+}
+
+async function confirmBulkImport() {
+  if (!bulkFileData) {
+    toast("No hay datos para importar", "warning");
+    return;
+  }
+
+  const fileInput = document.getElementById("bulk-file");
+  const file = fileInput.files[0];
+  if (!file) {
+    toast("Selecciona un archivo", "warning");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("archivo", file);
+  formData.append("modo", "importar");
+
+  try {
+    toast("Importando productos...", "info");
+    const result = await apiCall("/productos/importar/", "POST", formData, true);
+
+    let msg = `Importación completada: ${result.procesados} productos`;
+    if (result.errores && result.errores.length > 0) {
+      msg += `, ${result.errores.length} errores`;
+    }
+    toast(msg, result.errores?.length > 0 ? "warning" : "success");
+
+    closeModal();
+    await loadAllData();
+    render();
+  } catch (e) {
+    toast(`Error: ${e.message}`, "danger");
+  }
+}
+
+function downloadTemplate() {
+  const csvContent = "codigo,nombre,precio_venta,costo,stock_actual,stock_minimo,descripcion,codigo_barras\nPROD001,Producto Ejemplo,100.00,50.00,10,5,Descripcion del producto,1234567890123\nPROD002,Otro Producto,200.00,100.00,20,10,Otra descripcion,9876543210987";
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "plantilla_productos.csv";
+  link.click();
 }
 
 function modalPrompt(label, defaultValue = "") {
@@ -2017,21 +2314,40 @@ function generateReceipt(venta, cartItems) {
         <p>Vea nuestros productos en nuestra tienda</p>
         <p>¡Vuelva pronto!</p>
       </div>
-      <script>
-        window.onload = function() {
-          window.print();
-          window.onafterprint = function() { window.close(); };
-        };
-      </script>
     </body>
     </html>
   `;
 
-  const printWindow = window.open('', '_blank', 'width=400,height=600');
-  if (printWindow) {
-    printWindow.document.write(receiptHtml);
-    printWindow.document.close();
-  }
+  // Crear un elemento oculto para imprimir
+  const printFrame = document.createElement('iframe');
+  printFrame.style.display = 'none';
+  printFrame.name = 'print-frame';
+  document.body.appendChild(printFrame);
+
+  const frameDoc = printFrame.contentWindow.document;
+  frameDoc.open();
+  frameDoc.write(receiptHtml);
+  frameDoc.close();
+
+  // Esperar a que cargue el contenido y luego imprimir
+  printFrame.onload = function() {
+    try {
+      printFrame.contentWindow.focus();
+      printFrame.contentWindow.print();
+    } catch (e) {
+      // Si falla, intentar con window.open
+      const printWindow = window.open('', '_blank', 'width=400,height=600');
+      if (printWindow) {
+        printWindow.document.write(receiptHtml);
+        printWindow.document.close();
+        printWindow.print();
+      }
+    }
+    // Limpiar después de unos segundos
+    setTimeout(() => {
+      document.body.removeChild(printFrame);
+    }, 3000);
+  };
 }
 
 function updateSyncBadge() {
