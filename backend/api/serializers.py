@@ -364,6 +364,7 @@ class DashboardResumenSerializer(serializers.Serializer):
     compras_hoy = serializers.IntegerField()
     weeklySales = serializers.ListField(child=serializers.DictField())
     topProducts = serializers.ListField(child=serializers.DictField())
+    otrosPorcentaje = serializers.IntegerField()
 
 
 class GastoSerializer(serializers.ModelSerializer):

@@ -239,7 +239,7 @@ function startLiveSync() {
     } catch (error) {
       console.error("Live sync failed:", error);
     }
-  }, 30000);
+  }, 10000);
 }
 
 function stopLiveSync() {
@@ -415,16 +415,40 @@ async function loadDashboardData() {
   }
 }
 
-async function loadReportData(fecha = null) {
+async function loadReportData(fecha = null, mes = null, anio = null) {
   try {
     let url = "/reportes/";
+    const params = [];
     if (fecha) {
-      url += `?fecha=${fecha}`;
+      params.push(`fecha=${fecha}`);
+    }
+    if (mes) {
+      params.push(`mes=${mes}`);
+    }
+    if (anio) {
+      params.push(`anio=${anio}`);
+    }
+    if (params.length > 0) {
+      url += "?" + params.join("&");
     }
     data.reporte = await apiCall(url);
   } catch (e) {
     console.error("Error loading report data:", e);
     data.reporte = null;
+  }
+}
+
+async function buscarFacturaPorNumero(numeroFactura) {
+  try {
+    const venta = await apiCall(`/ventas/buscar/?numero=${encodeURIComponent(numeroFactura)}`);
+    if (venta) {
+      viewSaleReceipt(venta.id);
+    } else {
+      toast("Factura no encontrada", "warning");
+    }
+  } catch (e) {
+    console.error("Error buscando factura:", e);
+    toast("Factura no encontrada", "warning");
   }
 }
 
@@ -919,13 +943,18 @@ function dashboardView() {
           <h3 class="chart-title">Productos Más Vendidos</h3>
           <div class="pie-stage">
             <div class="pie-wrap">
-              <svg class="pie-svg" viewBox="0 0 100 100">${renderPieSlices(topProd)}</svg>
+              <svg class="pie-svg" viewBox="0 0 100 100">${renderPieSlices(topProd, d.otrosPorcentaje || 0)}<circle cx="50" cy="50" r="38" fill="none" stroke="#000" stroke-width="1.5"/></svg>
               <div class="chart-tooltip" id="pie-tooltip"></div>
             </div>
             <div class="pie-legend">
-              ${topProd.length > 0 ? topProd.map((item) => `
-                <div class="pie-legend-item"><span class="dot" style="background:${item.color}"></span><span>${item.label}</span><span style="color:${item.color}">${item.value}%</span></div>
-              `).join("") : "<p style='color:#888;padding:20px;'>Sin datos de ventas</p>"}
+              ${(() => {
+                if (topProd.length === 0) return "<p style='color:#888;padding:20px;'>Sin datos de ventas</p>";
+                const otrosPorcentaje = d.otrosPorcentaje || 0;
+                const itemsWithOther = otrosPorcentaje > 0 ? [...topProd, { label: "Otros", value: otrosPorcentaje, color: "#9ca3af" }] : topProd;
+                return itemsWithOther.map((item) => `
+                  <div class="pie-legend-item"><span class="dot" style="background:${item.color}"></span><span>${item.label}</span><span style="color:${item.color}">${item.value}%</span></div>
+                `).join("");
+              })()}
             </div>
           </div>
         </section>
@@ -1138,6 +1167,26 @@ function cashiersView() {
 function reportsView() {
   const reporte = data.reporte || {};
   const fechaActual = reporte.fecha || new Date().toISOString().split('T')[0];
+  const today = new Date();
+  const currentMonth = today.getMonth() + 1;
+  const currentYear = today.getFullYear();
+  const selectedMes = reporte.mes || currentMonth;
+  const selectedAnio = reporte.anio || currentYear;
+
+  const months = [
+    { value: 1, label: "Enero" },
+    { value: 2, label: "Febrero" },
+    { value: 3, label: "Marzo" },
+    { value: 4, label: "Abril" },
+    { value: 5, label: "Mayo" },
+    { value: 6, label: "Junio" },
+    { value: 7, label: "Julio" },
+    { value: 8, label: "Agosto" },
+    { value: 9, label: "Septiembre" },
+    { value: 10, label: "Octubre" },
+    { value: 11, label: "Noviembre" },
+    { value: 12, label: "Diciembre" },
+  ];
 
   return `
     <section class="view reports-view">
@@ -1173,6 +1222,12 @@ function reportsView() {
 
       <div class="reports-grid">
         <section class="panel">
+          <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+            <div class="fecha-selector" style="margin:0;">
+              <input type="text" id="buscar-factura" class="input" placeholder="Buscar factura..." style="width:160px;padding:4px 8px;font-size:11px;" />
+              <button class="button" type="button" data-action="buscar-factura" style="padding:4px 8px;font-size:11px;">🔍</button>
+            </div>
+          </div>
           <h3>Ventas del Día</h3>
           <div class="table-responsive">
             <table>
@@ -1198,6 +1253,15 @@ function reportsView() {
 
       <section class="panel month-summary">
         <h3>Resumen del Mes</h3>
+        <div class="month-selector">
+          <select id="reporte-mes" class="select">
+            ${months.map(m => `<option value="${m.value}" ${m.value === selectedMes ? 'selected' : ''}>${m.label}</option>`).join('')}
+          </select>
+          <select id="reporte-anio" class="select">
+            ${[currentYear, currentYear - 1, currentYear - 2].map(y => `<option value="${y}" ${y === selectedAnio ? 'selected' : ''}>${y}</option>`).join('')}
+          </select>
+          <button class="button" type="button" data-action="buscar-mes">Buscar Mes</button>
+        </div>
         <div class="month-stats">
           <div class="month-stat"><div class="label">Ventas</div><div class="value">${formatCurrency(reporte.total_ventas_mes || 0)}</div></div>
           <div class="month-stat"><div class="label">Gastos</div><div class="value gasto">${formatCurrency(reporte.total_gastos_mes || 0)}</div></div>
@@ -1238,16 +1302,26 @@ function settingsView() {
   `;
 }
 
-function renderPieSlices(items) {
+function renderPieSlices(items, otrosPorcentaje = 0) {
+  if (!items || items.length === 0) return "";
   const center = 50;
   const radius = 38;
+  let pieItems = items.map((item) => ({ ...item, normalizedValue: item.value }));
+  if (otrosPorcentaje > 0) {
+    pieItems.push({
+      label: "Otros",
+      value: otrosPorcentaje,
+      normalizedValue: otrosPorcentaje,
+      color: "#9ca3af"
+    });
+  }
   let startAngle = -90;
-  return items.map((item, index) => {
-    const sweep = (item.value / 100) * 360;
+  return pieItems.map((item, index) => {
+    const sweep = (item.normalizedValue / 100) * 360;
     const endAngle = startAngle + sweep;
     const path = describeArc(center, center, radius, startAngle, endAngle);
     startAngle = endAngle;
-    return `<path class="pie-slice js-pie-slice" data-label="${escapeHtml(item.label)}" data-value="${item.value}" d="${path}" fill="${item.color}" style="animation-delay:${index * 60}ms"></path>`;
+    return `<path class="pie-slice js-pie-slice" data-label="${escapeHtml(item.label)}" data-value="${Math.round(item.normalizedValue)}" d="${path}" fill="${item.color}" stroke="#000" stroke-width="1" style="animation-delay:${index * 60}ms"></path>`;
   }).join("");
 }
 
@@ -1299,7 +1373,11 @@ function handleClick(event) {
 
   if (target.dataset.view) {
     state.activeView = target.dataset.view;
-    render();
+    if (state.activeView === "reports") {
+      loadReportData().then(() => render());
+    } else {
+      render();
+    }
     return;
   }
 
@@ -1404,6 +1482,20 @@ function handleClick(event) {
       const fechaInput = document.getElementById("reporte-fecha");
       if (fechaInput) {
         loadReportData(fechaInput.value).then(() => render());
+      }
+      break;
+    case "buscar-mes":
+      const mesInput = document.getElementById("reporte-mes");
+      const anioInput = document.getElementById("reporte-anio");
+      if (mesInput && anioInput) {
+        const currentFecha = document.getElementById("reporte-fecha")?.value || new Date().toISOString().split('T')[0];
+        loadReportData(currentFecha, mesInput.value, anioInput.value).then(() => render());
+      }
+      break;
+    case "buscar-factura":
+      const facturaInput = document.getElementById("buscar-factura");
+      if (facturaInput && facturaInput.value.trim()) {
+        buscarFacturaPorNumero(facturaInput.value.trim());
       }
       break;
     case "view-sale":
@@ -1595,12 +1687,14 @@ function handleInput(event) {
   if (!isSearchInput && !isPaymentField) return;
 
   if (isPaymentField) {
-    let value = target.value.replace(/[^\d.]/g, "");
-    const parts = value.split(".");
-    if (parts.length > 2) value = parts[0] + "." + parts.slice(1).join("");
-    if (parts[1] && parts[1].length > 2) value = parts[0] + "." + parts[1].slice(0, 2);
-    if (parts[0]) parts[0] = Number(parts[0]).toLocaleString("es-ES");
-    const formattedValue = parts[0] + (parts[1] ? "." + parts[1] : "");
+    let value = target.value.replace(/[^\d]/g, "");
+    if (!value) {
+      state.cashReceived = "";
+      target.value = "";
+      return;
+    }
+    const numValue = Number(value);
+    const formattedValue = numValue.toLocaleString("es-ES");
     state.cashReceived = formattedValue;
     target.value = formattedValue;
     const btn = document.querySelector("[data-action='finalize-sale']");
@@ -1759,7 +1853,7 @@ async function finalizeSale() {
   const success = await createSale(saleData);
   if (success) {
     state.activeView = "point-of-sale";
-    render();
+    loadAllData().then(() => render());
   }
 }
 
@@ -2466,7 +2560,8 @@ function generateReceipt(venta, cartItems) {
 
   const subtotal = items.reduce((sum, item) => sum + item.subtotal, 0);
   const total = subtotal;
-  const cambio = Number(state.cashReceived) - total;
+  const montoRecibido = Number(String(state.cashReceived).replace(/\./g, ""));
+  const cambio = montoRecibido - total;
 
   const receiptHtml = `
     <!DOCTYPE html>
@@ -2561,7 +2656,7 @@ function generateReceipt(venta, cartItems) {
         </div>
         <div class="info-row">
           <span>Monto recibido:</span>
-          <span>${formatCurrency(Number(venta.monto_pagado) || state.cashReceived || total)}</span>
+          <span>${formatCurrency(Number(venta.monto_pagado) || montoRecibido || total)}</span>
         </div>
         ${cambio > 0 ? `
         <div class="info-row">

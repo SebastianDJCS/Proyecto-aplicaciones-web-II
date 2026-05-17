@@ -156,6 +156,18 @@ class VentaViewSet(viewsets.ModelViewSet):
         venta.anular(motivo=motivo)
         return Response(self.get_serializer(venta).data)
 
+    @action(detail=False, methods=["get"])
+    def buscar(self, request):
+        numero = request.query_params.get("numero", "").strip()
+        if not numero:
+            return Response({"detail": "Número de factura requerido"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            venta = Venta.objects.select_related("turno_caja", "vendedor", "turno_caja__usuario").prefetch_related("detalles__producto").get(numero_factura=numero)
+            return Response(VentaSerializer(venta).data)
+        except Venta.DoesNotExist:
+            return Response({"detail": "Factura no encontrada"}, status=status.HTTP_404_NOT_FOUND)
+
 
 class CompraViewSet(viewsets.ModelViewSet):
     queryset = Compra.objects.select_related("proveedor", "usuario").all().order_by("-fecha_compra")
@@ -212,14 +224,17 @@ class DashboardViewSet(viewsets.ViewSet):
         colores = ["#dc2626", "#7c3aed", "#059669", "#d97706", "#0891b2", "#db2777", "#4f46e5", "#dc2626", "#65a30d", "#9333ea"]
 
         top_products = []
+        otros_value = 0
         if productos_top:
-            total_top = sum(float(p["total_vendido"]) for p in productos_top) or 1
-            for i, p in enumerate(productos_top[:5]):
-                top_products.append({
-                    "label": p["producto__nombre"],
-                    "value": round(float(p["total_vendido"]) / total_top * 100),
-                    "color": colores[i % len(colores)]
-                })
+            total_todos = sum(float(p["total_vendido"]) for p in productos_top)
+            if total_todos > 0:
+                for i, p in enumerate(productos_top[:5]):
+                    top_products.append({
+                        "label": p["producto__nombre"],
+                        "value": round(float(p["total_vendido"]) / total_todos * 100),
+                        "color": colores[i % len(colores)]
+                    })
+                otros_value = round(100 - sum(item["value"] for item in top_products))
 
         resumen = {
             "productos": Producto.objects.filter(activo=True).count(),
@@ -230,6 +245,7 @@ class DashboardViewSet(viewsets.ViewSet):
             "compras_hoy": Compra.objects.filter(fecha_compra__gte=hoy_dt, fecha_compra__lt=manana_dt).count(),
             "weeklySales": dias_semana,
             "topProducts": top_products,
+            "otrosPorcentaje": otros_value,
         }
         serializer = DashboardResumenSerializer(resumen)
         return Response(serializer.data)
