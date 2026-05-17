@@ -685,7 +685,7 @@ function applySettings() {
   document.body.classList.toggle("reduce-motion", state.settings.reduceMotion);
   document.documentElement.style.setProperty("--accent", state.settings.accent);
   if (state.settings.fontSize) {
-    document.body.style.fontSize = state.settings.fontSize + "px";
+    document.documentElement.style.setProperty("--base-font-size", state.settings.fontSize + "px");
   }
   // derive a secondary accent shade for subtle UI accents
   try {
@@ -833,7 +833,7 @@ function getAllowedViews() {
 
 function getViewMeta(viewId) {
   const meta = {
-    dashboard: { title: "Panel de Control" },
+    dashboard: { title: "Resumen de Ventas" },
     "point-of-sale": { title: "Punto de Venta" },
     inventory: { title: "Inventario" },
     suppliers: { title: "Proveedores" },
@@ -880,7 +880,7 @@ function dashboardView() {
 
   return `
     <section class="view dashboard-view">
-      <div class="page-head"><div><h2>Resumen de Ventas</h2><div class="eyebrow">Vista general del negocio</div></div></div>
+      <div class="page-head"><div><div class="eyebrow">Vista general del negocio</div></div></div>
       <div class="stats-grid">
         ${stats.map((stat) => `
           <article class="panel stat-card">
@@ -959,7 +959,7 @@ function posView() {
 
 return `
     <section class="view pos-view">
-      <div class="page-head"><div><h2>Punto de Venta</h2><div class="eyebrow">${getCurrentDateLabel()}</div></div></div>
+      <div class="page-head"></div>
       <div class="pos-layout">
         <div class="pos-inventory">
           <section class="panel pos-card">
@@ -1035,7 +1035,7 @@ function inventoryView() {
   return `
     <section class="view inventory-view">
       <div class="page-head">
-        <div><h2>Inventario</h2><div class="eyebrow">${getCurrentDateLabel()}</div></div>
+        <div></div>
         <div class="section-actions"><button class="button ghost" type="button" data-action="bulk-upload">Carga Masiva</button><button class="button" type="button" data-action="new-product">Nuevo Producto</button></div>
       </div>
       <section class="panel pad inventory-list">
@@ -1075,7 +1075,7 @@ function suppliersView() {
   return `
     <section class="view suppliers-view">
       <div class="page-head">
-        <div><h2>Proveedores</h2><div class="eyebrow">${getCurrentDateLabel()}</div></div>
+        <div></div>
         <div class="section-actions"><button class="button" type="button" data-action="new-supplier">Nuevo Proveedor</button></div>
       </div>
       <section class="panel pad">
@@ -1108,7 +1108,7 @@ function cashiersView() {
   return `
     <section class="view cashiers-view">
       <div class="page-head">
-        <div><h2>Cajeros</h2><div class="eyebrow">${active} de ${total} activos</div></div>
+        <div><div class="eyebrow">${active} de ${total} activos</div></div>
         <div class="section-actions"><button class="button ghost" type="button" data-action="refresh-cashiers">↻ Actualizar</button><button class="button" type="button" data-action="new-cashier">Nuevo Cajero</button></div>
       </div>
       <section class="panel cashiers-table">
@@ -1142,7 +1142,7 @@ function reportsView() {
   return `
     <section class="view reports-view">
       <div class="page-head">
-        <div><h2>Reportes</h2><div class="eyebrow">Gestión de ventas y gastos</div></div>
+        <div><h2 style="margin:0;">Gestión de Ventas</h2></div>
         <div class="section-actions">
           <button class="button" type="button" data-action="new-expense">+ Gasto</button>
         </div>
@@ -1211,7 +1211,7 @@ function reportsView() {
 function settingsView() {
   return `
     <section class="view settings-view">
-      <div class="page-head"><div><h2>Configuración</h2><div class="eyebrow">${getCurrentDateLabel()}</div></div></div>
+      <div class="page-head"><div><div class="eyebrow">${getCurrentDateLabel()}</div></div></div>
       <div class="settings-layout">
         <section class="settings-grid">
           <div class="panel settings-card"><h3>Configuración del Sistema</h3><p class="subtle-text">Personaliza la experiencia del panel.</p></div>
@@ -1312,13 +1312,13 @@ function handleClick(event) {
     case "increase-font":
       state.settings.fontSize = (state.settings.fontSize || 14) + 2;
       if (state.settings.fontSize > 24) state.settings.fontSize = 24;
-      document.body.style.fontSize = state.settings.fontSize + "px";
+      document.documentElement.style.setProperty("--base-font-size", state.settings.fontSize + "px");
       saveSettings();
       break;
     case "decrease-font":
       state.settings.fontSize = (state.settings.fontSize || 14) - 2;
       if (state.settings.fontSize < 10) state.settings.fontSize = 10;
-      document.body.style.fontSize = state.settings.fontSize + "px";
+      document.documentElement.style.setProperty("--base-font-size", state.settings.fontSize + "px");
       saveSettings();
       break;
     case "add-to-cart":
