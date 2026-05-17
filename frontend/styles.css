@@ -56,6 +56,17 @@ body[data-theme="dark"] {
   --shadow-soft: 0 12px 30px rgba(0, 0, 0, 0.34);
 }
 body.compact-sidebar { --sidebar-width: var(--sidebar-collapsed-width); }
+body.compact-sidebar .brand { padding: 16px 8px; text-align: center; overflow: hidden; }
+body.compact-sidebar .brand-name { font-size: 1rem; white-space: nowrap; }
+body.compact-sidebar .brand-subtitle { display: none; }
+body.compact-sidebar .nav { gap: 4px; padding: 12px 8px; }
+body.compact-sidebar .nav-item { display: flex; justify-content: center; align-items: center; padding: 12px 8px; }
+body.compact-sidebar .nav-item span { display: none; }
+body.compact-sidebar .nav-icon { margin: 0; }
+body.compact-sidebar .sidebar-footer { padding: 12px 8px; }
+body.compact-sidebar .user-chip { display: flex; justify-content: center; }
+body.compact-sidebar .user-chip > div:last-child { display: none; }
+body.compact-sidebar .avatar { width: 32px; height: 32px; font-size: 0.8rem; }
 body.reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after {
   animation: none !important;
   transition: none !important;

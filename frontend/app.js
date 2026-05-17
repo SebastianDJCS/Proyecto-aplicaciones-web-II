@@ -315,8 +315,15 @@ async function loginBackend(username, password) {
 
     state.token = res.access;
     state.refresh = res.refresh;
-    // Cargamos datos protegidos con el token recién obtenido
+    const me = await apiCall("/usuarios/me/").catch(() => null);
+    const role = me?.rol === "administrador" ? "admin" : me?.rol === "cajero" ? "cashier" : "cashier";
+    state.session = { username, name: me ? `${me.first_name} ${me.last_name}` : username, role, initials: username.substring(0, 1).toUpperCase() };
+    state.activeView = role === "cashier" ? "point-of-sale" : "dashboard";
+    state.authenticated = true;
+    saveSession({ ...state.session, token: state.token, refresh: state.refresh });
+    await apiCall("/usuarios/login_status/", "POST").catch(() => {});
     await loadAllData();
+    data.cashiers = await apiCall("/usuarios/").catch(() => data.cashiers);
     render();
     startLiveSync();
     return true;
@@ -358,25 +365,23 @@ async function loadAllData() {
   loadAllDataInProgress = true;
   console.log("Cargando datos del backend...");
   try {
-    const [cashiers, products, categories, suppliers] = await Promise.allSettled([
+    const [cashiers, products, categories, suppliers, dashboard] = await Promise.allSettled([
       apiCall("/usuarios/"),
       apiCall("/productos/"),
       apiCall("/categorias/"),
-      apiCall("/proveedores/")
+      apiCall("/proveedores/"),
+      apiCall("/dashboard/")
     ]);
 
     if (cashiers.status === "fulfilled") data.cashiers = cashiers.value;
     if (products.status === "fulfilled") data.products = products.value;
     if (categories.status === "fulfilled") data.categories = categories.value;
     if (suppliers.status === "fulfilled") data.suppliers = suppliers.value;
-
-    const failed = [cashiers, products, categories, suppliers].filter((item) => item.status === "rejected");
-    if (failed.length) {
-      console.warn("Algunos datos no se pudieron cargar:", failed.map((item) => item.reason?.message || String(item.reason)));
+    if (dashboard.status === "fulfilled" && dashboard.value) {
+      data.dashboard = dashboard.value;
+      data.weeklySales = dashboard.value.weeklySales || [];
+      data.topProducts = dashboard.value.topProducts || [];
     }
-
-    await loadDashboardData();
-    await loadReportData();
 
     console.log("Datos cargados:", data.cashiers.length, "cajeros,", data.products.length, "productos");
     loadAllDataInProgress = false;
@@ -1042,10 +1047,10 @@ function inventoryView() {
         </div>
         <div class="table-responsive" style="margin-top:14px;">
           <table>
-            <thead><tr><th>Producto</th><th>Categoría</th><th>Stock</th><th>Costo</th><th>Precio</th><th>Margen</th><th>Acciones</th></tr></thead>
+            <thead><tr><th>Producto</th><th>Categoría</th><th>Stock</th><th>Costo</th><th>Precio</th><th>Proveedor</th><th>Acciones</th></tr></thead>
             <tbody>
               ${rows.map((product) => {
-                const margen = product.costo > 0 ? ((product.precio_venta - product.costo) / product.costo * 100).toFixed(1) : 0;
+                const proveedor = data.suppliers.find(s => String(s.id) === String(product.proveedor));
                 return `
                 <tr>
                   <td><strong>${product.nombre}</strong><br><span class="subtle-text">${product.codigo}</span></td>
@@ -1053,7 +1058,7 @@ function inventoryView() {
                   <td><span class="chip ${product.stock_actual <= product.stock_minimo ? "danger" : "success"}">${product.stock_actual}</span></td>
                   <td>${formatCurrency(product.costo)}</td>
                   <td>${formatCurrency(product.precio_venta)}</td>
-                  <td><span class="chip success">+${margen}%</span></td>
+                  <td>${proveedor ? proveedor.nombre : "-"}</td>
                   <td><div class="action-icons"><button class="icon-btn" type="button" data-action="edit-product" data-id="${product.id}">✎</button><button class="icon-btn danger" type="button" data-action="delete-product" data-id="${product.id}">🗑</button></div></td>
                 </tr>
               `}).join("")}
@@ -1104,6 +1109,10 @@ function cashiersView() {
 
   return `
     <section class="view cashiers-view">
+      <div class="page-head">
+        <div><h2>Cajeros</h2><div class="eyebrow">${active} de ${total} activos</div></div>
+        <div class="section-actions"><button class="button ghost" type="button" data-action="refresh-cashiers">↻ Actualizar</button><button class="button" type="button" data-action="new-cashier">Nuevo Cajero</button></div>
+      </div>
       <div class="page-head">
         <div><h2>Cajeros</h2><div class="eyebrow">Total: ${total} | Conectados: ${active}</div></div>
         <div class="section-actions"><button class="button" type="button" data-action="new-cashier">Nuevo Cajero</button></div>
@@ -1345,6 +1354,13 @@ function handleClick(event) {
     case "new-cashier":
       showModal(formNewCashier());
       break;
+    case "refresh-cashiers":
+      apiCall("/usuarios/").then((cashiers) => {
+        data.cashiers = cashiers;
+        render();
+        toast("Cajeros actualizados", "success");
+      }).catch(() => toast("Error al actualizar", "danger"));
+      break;
     case "new-product":
       showModal(formNewProduct());
       break;
@@ -1400,7 +1416,7 @@ function handleClick(event) {
   }
 }
 
-function handleSubmit(event) {
+async function handleSubmit(event) {
   // Evitar recarga accidental por envío de formularios
   try {
     event.preventDefault();
@@ -1425,7 +1441,8 @@ function handleSubmit(event) {
       telefono: formData.get("telefono") || "",
       rol: formData.get("rol") || "vendedor",
     };
-    createCashier(userData).then(() => closeModal());
+    closeModal();
+    await createCashier(userData);
     return;
   }
 
@@ -1444,7 +1461,8 @@ function handleSubmit(event) {
       proveedor: formData.get("proveedor") || null,
       activo: formData.get("activo") === "on",
     };
-    createProduct(productData).then(() => closeModal());
+    closeModal();
+    await createProduct(productData);
     return;
   }
 
@@ -1464,12 +1482,13 @@ function handleSubmit(event) {
       proveedor: formData.get("proveedor") || null,
       activo: formData.get("activo") === "on",
     };
+    closeModal();
     apiCall(`/productos/${productId}/`, "PATCH", productData)
-      .then(() => loadAllData())
       .then(() => {
-        toast("Producto actualizado.", "success");
-        closeModal();
+        const idx = data.products.findIndex(p => String(p.id) === String(productId));
+        if (idx !== -1) data.products[idx] = { ...data.products[idx], ...productData };
         render();
+        toast("Producto actualizado.", "success");
       })
       .catch((e) => toast(`Error: ${e.message}`, "danger"));
     return;
@@ -1484,7 +1503,8 @@ function handleSubmit(event) {
       direccion: formData.get("direccion") || "",
       activo: true,
     };
-    createSupplier(supplierData).then(() => closeModal());
+    closeModal();
+    await createSupplier(supplierData);
     return;
   }
 
@@ -1500,12 +1520,13 @@ function handleSubmit(event) {
       direccion: formData.get("direccion") || "",
       activo: formData.get("activo") === "on",
     };
+    closeModal();
     apiCall(`/proveedores/${supplierId}/`, "PATCH", supplierData)
-      .then(() => loadAllData())
       .then(() => {
-        toast("Proveedor actualizado.", "success");
-        closeModal();
+        const idx = data.suppliers.findIndex(s => String(s.id) === String(supplierId));
+        if (idx !== -1) data.suppliers[idx] = { ...data.suppliers[idx], ...supplierData };
         render();
+        toast("Proveedor actualizado.", "success");
       })
       .catch((e) => toast(`Error: ${e.message}`, "danger"));
     return;
@@ -1524,12 +1545,13 @@ function handleSubmit(event) {
       rol: formData.get("rol") || "vendedor",
     };
     if (password) cashierData.password = password;
+    closeModal();
     apiCall(`/usuarios/${cashierId}/`, "PATCH", cashierData)
-      .then(() => loadAllData())
       .then(() => {
-        toast("Cajero actualizado.", "success");
-        closeModal();
+        const idx = data.cashiers.findIndex(c => String(c.id) === String(cashierId));
+        if (idx !== -1) data.cashiers[idx] = { ...data.cashiers[idx], ...cashierData };
         render();
+        toast("Cajero actualizado.", "success");
       })
       .catch((e) => toast(`Error: ${e.message}`, "danger"));
     return;
@@ -1556,7 +1578,8 @@ function handleSubmit(event) {
       tipo: formData.get("tipo"),
       descripcion: formData.get("descripcion") || "",
     };
-    createGasto(gastoData).then(() => closeModal());
+    closeModal();
+    await createGasto(gastoData);
     return;
   }
 }
@@ -1583,7 +1606,6 @@ function handleInput(event) {
         target.value = "";
         state.search.pos = "";
         toast(`Agregado: ${product.nombre}`, "success");
-        target.focus();
       }
     }
   } else if (target.matches("[data-search='inventory']")) {
@@ -1614,33 +1636,11 @@ function handleChange(event) {
 }
 
 function login(username, password) {
-  // First try backend API if available
-  loginBackend(username, password).then(async (backendSuccess) => {
+  loginBackend(username, password).then((backendSuccess) => {
     if (backendSuccess) {
-      state.authenticated = true;
-      // Obtener info del usuario logueado
-      const me = await apiCall("/usuarios/me/").catch(() => null);
-      const role = me?.rol === "administrador"
-        ? "admin"
-        : me?.rol === "cajero"
-          ? "cashier"
-          : (username.toLowerCase().includes("admin") ? "admin" : "cashier");
-      state.session = { username, name: me ? `${me.first_name} ${me.last_name}` : username, role, initials: username.substring(0, 1).toUpperCase() };
-      state.activeView = role === "cashier" ? "point-of-sale" : "dashboard";
-      saveSession({ ...state.session, token: state.token, refresh: state.refresh });
-
-      // Marcar usuario como logueado en el backend
-      await apiCall("/usuarios/login_status/", "POST").catch(() => {});
-
-      // Recargar lista de cajeros para ver el estado actualizado
-      data.cashiers = await apiCall("/usuarios/").catch(() => data.cashiers);
-
       toast(`Bienvenido, ${state.session.name}.`, "success");
-      render();
       return;
     }
-
-    // Si neither worked
     toast("Credenciales inválidas. Usa admin / admin123", "danger");
     render();
   });
@@ -1795,6 +1795,8 @@ function bulkUploadModal() {
             <li><code>stock_minimo</code> - Stock mínimo (opcional)</li>
             <li><code>descripcion</code> - Descripción (opcional)</li>
             <li><code>codigo_barras</code> - Código de barras (opcional)</li>
+            <li><code>categoria</code> - Nombre de categoría (opcional)</li>
+            <li><code>proveedor</code> - Nombre del proveedor (opcional)</li>
           </ul>
           <button class="button ghost" type="button" data-action="download-template">Descargar Plantilla</button>
         </div>
@@ -1913,7 +1915,7 @@ async function confirmBulkImport() {
 }
 
 function downloadTemplate() {
-  const csvContent = "codigo,nombre,precio_venta,costo,stock_actual,stock_minimo,descripcion,codigo_barras\nPROD001,Producto Ejemplo,100.00,50.00,10,5,Descripcion del producto,1234567890123\nPROD002,Otro Producto,200.00,100.00,20,10,Otra descripcion,9876543210987";
+  const csvContent = "codigo,nombre,precio_venta,costo,stock_actual,stock_minimo,descripcion,codigo_barras,categoria,proveedor\nPROD001,Producto Ejemplo,100.00,50.00,10,5,Descripcion del producto,1234567890123,Electronica,Proveedor A\nPROD002,Otro Producto,200.00,100.00,20,10,Otra descripcion,9876543210987,Alimentos,Proveedor B";
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);

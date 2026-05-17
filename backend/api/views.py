@@ -389,6 +389,16 @@ class ImportarProductosView(APIView):
                 stock_minimo = int(row.get("stock_minimo", 0)) if pd.notna(row.get("stock_minimo")) else 0
                 descripcion = str(row.get("descripcion", "")) if pd.notna(row.get("descripcion")) else ""
                 codigo_barras = str(row.get("codigo_barras", "")) if pd.notna(row.get("codigo_barras")) else ""
+                categoria_nombre = str(row.get("categoria", "")).strip() if pd.notna(row.get("categoria")) else ""
+                proveedor_nombre = str(row.get("proveedor", "")).strip() if pd.notna(row.get("proveedor")) else ""
+
+                categoria_obj = None
+                if categoria_nombre:
+                    categoria_obj = Categoria.objects.filter(nombre__iexact=categoria_nombre).first()
+
+                proveedor_obj = None
+                if proveedor_nombre:
+                    proveedor_obj = Proveedor.objects.filter(nombre__iexact=proveedor_nombre).first()
 
                 resultado = {
                     "fila": idx + 2,
@@ -400,6 +410,8 @@ class ImportarProductosView(APIView):
                     "stock_minimo": stock_minimo,
                     "descripcion": descripcion,
                     "codigo_barras": codigo_barras,
+                    "categoria": categoria_nombre,
+                    "proveedor": proveedor_nombre,
                 }
 
                 if modo == "preview":
@@ -418,6 +430,8 @@ class ImportarProductosView(APIView):
                             "stock_minimo": stock_minimo,
                             "descripcion": descripcion,
                             "codigo_barras": codigo_barras,
+                            "categoria": categoria_obj,
+                            "proveedor": proveedor_obj,
                             "estado_sync": EstadoSync.PENDIENTE
                         }
                     )
