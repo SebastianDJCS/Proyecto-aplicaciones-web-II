@@ -45,7 +45,7 @@ function iconGear(){ return iconSvg('M19.14 12.94a7 7 0 0 0 0-1.88l2.03-1.58a.5.
 function iconArrow(){ return iconSvg('M12 2l-1.41 1.41L17.17 10H4v2h13.17l-6.58 6.59L12 22l10-10z'); }
 function iconLock(){ return iconSvg('M12 17a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm6-6h-1V9a5 5 0 0 0-10 0v2H6a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1z'); }
 function iconSearch(){ return iconSvg('M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79L20 21.5 21.5 20l-6-6z'); }
-function iconMoney(){ return iconSvg('M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm-5 4h10v2H7v-2zm3-4h4v2h-4V8z'); }
+function iconMoney(){ return iconSvg('M4 4h16v16H4V4zm2 2v12h12V6H6zm1 2h10v2H7V8zm0 4h10v2H7v-2z'); }
 function iconCube(){ return iconSvg('M12 2L3.5 7v10L12 22l8.5-5V7L12 2zm0 2.18L18.6 7 12 10.82 5.4 7 12 4.18z'); }
 function iconWarning(){ return iconSvg('M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z'); }
 function iconLogout(){ return iconSvg('M16 13v-2H7V8l-5 4 5 4v-3zM20 3h-8v2h8v14h-8v2h8a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z'); }
@@ -116,7 +116,7 @@ function getProductCategoryLabel(product) {
 
 const nav = {
   admin: [
-    { id: "dashboard", label: "Dashboard", icon: iconHome() },
+    { id: "dashboard", label: "Resumen de ventas", icon: iconHome() },
     { id: "point-of-sale", label: "Punto de Venta", icon: iconCart() },
     { id: "inventory", label: "Inventario", icon: iconBox() },
     { id: "suppliers", label: "Proveedores", icon: iconUsers() },
@@ -861,8 +861,8 @@ function dashboardView() {
   const numVentas = Number(d.ventas_hoy) || 0;
   const stats = [
     { label: "Ventas Hoy", value: ventasHoy, trend: `${numVentas} facturas`, icon: iconMoney(), tone: "" },
-    { label: "Facturas", value: numVentas, trend: "Ventas realizadas", icon: iconCube(), tone: "purple" },
-    { label: "Alertas Stock", value: d.productos_stock_bajo || 0, trend: "Productos con stock bajo", icon: iconWarning(), tone: "red" },
+    { label: "Facturas", value: numVentas, trend: `${numVentas} emitidas`, icon: iconCube(), tone: "purple" },
+    { label: "Alertas Stock", value: d.productos_stock_bajo || 0, trend: `prod. bajos`, icon: iconWarning(), tone: "red" },
   ];
 
   const weekly = (data.weeklySales || []).length > 0 ? data.weeklySales : [
@@ -880,7 +880,7 @@ function dashboardView() {
 
   return `
     <section class="view dashboard-view">
-      <div class="page-head"><div><h2>Dashboard - Resumen de Ventas</h2><div class="eyebrow">Vista general del negocio</div></div></div>
+      <div class="page-head"><div><h2>Resumen de Ventas</h2><div class="eyebrow">Vista general del negocio</div></div></div>
       <div class="stats-grid">
         ${stats.map((stat) => `
           <article class="panel stat-card">
@@ -934,14 +934,13 @@ function dashboardView() {
         <h3>Productos con Stock Bajo</h3>
         <div class="table-responsive">
           <table>
-            <thead><tr><th>Producto</th><th>Stock Actual</th><th>Stock Mínimo</th><th>Acción</th></tr></thead>
+            <thead><tr><th>Producto</th><th>Stock Actual</th><th>Stock Mínimo</th></tr></thead>
             <tbody>
               ${lowStock.map((item) => `
                 <tr>
                   <td>${item.nombre}</td>
                   <td><span class="chip ${Number(item.stock_actual) <= Number(item.stock_minimo) ? "danger" : "warning"}">${item.stock_actual}</span></td>
                   <td>${item.stock_minimo}</td>
-                  <td><button class="button secondary" type="button" data-action="restock" data-id="${item.id}">Reabastecer</button></td>
                 </tr>
               `).join("")}
             </tbody>
@@ -958,11 +957,11 @@ function posView() {
   const totals = cartTotals();
   const cartItems = state.cart.map((item) => ({ ...item, product: data.products.find((p) => String(p.id) === String(item.id)) }));
 
-  return `
+return `
     <section class="view pos-view">
       <div class="page-head"><div><h2>Punto de Venta</h2><div class="eyebrow">${getCurrentDateLabel()}</div></div></div>
-      <div class="pos-grid">
-        <div class="inventory-grid">
+      <div class="pos-layout">
+        <div class="pos-inventory">
           <section class="panel pos-card">
             <div class="toolbar"><div class="search-wrap"><span class="search-icon">${iconSearch()}</span><input class="search-input" data-search="pos" type="text" placeholder="Buscar producto o escanear código..." value="${escapeAttr(state.search.pos)}" /></div></div>
           </section>
@@ -979,9 +978,29 @@ function posView() {
             </div>
           </section>
         </div>
-        <aside class="panel cart-card">
-          <h3>Carrito de Venta</h3>
-          <div class="sale-summary">
+        <div class="pos-cart-panel">
+          <aside class="panel cart-card">
+            <h3>Resumen</h3>
+            <div class="sale-summary">
+              <div class="cart-footer">
+                <div class="cart-total-line"><span>Subtotal:</span><strong>${formatCurrency(totals.subtotal)}</strong></div>
+                <div class="cart-total-line"><span>TOTAL:</span><strong style="font-size:1.4rem;color:var(--accent)">${formatCurrency(totals.total)}</strong></div>
+              </div>
+              <div class="payment-grid" style="margin-top:10px;">
+                <button type="button" class="payment-option ${state.paymentMethod === "efectivo" ? "active" : ""}" data-action="payment-method" data-method="efectivo">${iconMoney()} <span>Efectivo</span></button>
+                <button type="button" class="payment-option ${state.paymentMethod === "tarjeta" ? "active" : ""}" data-action="payment-method" data-method="tarjeta">${iconCard()} <span>Tarjeta</span></button>
+              </div>
+              <div class="payment-field" style="margin-top:10px;${state.paymentMethod === "efectivo" ? "" : "display:none;"}">
+                <label for="cash-input"><strong>Efectivo Recibido</strong></label>
+                <input class="input" id="cash-input" data-payment-field="cash" type="text" inputmode="decimal" placeholder="0" value="${escapeAttr(state.cashReceived)}" />
+              </div>
+              <div style="margin-top:12px;">
+                <button class="button" type="button" data-action="finalize-sale" ${canFinalizeSale() ? "" : "disabled"} style="width:100%;">${iconPrinter()} Finalizar Venta</button>
+              </div>
+            </div>
+          </aside>
+          <aside class="panel cart-card">
+            <h3>Productos</h3>
             <div class="cart-list">
               ${cartItems.length ? cartItems.map((item) => `
                 <div class="cart-item">
@@ -994,29 +1013,8 @@ function posView() {
                 </div>
               `).join("") : `<div class="subtle-text" style="padding:10px 0 18px;">Carrito vacío</div>`}
             </div>
-            <div class="cart-footer">
-              <div class="cart-total-line"><span>Subtotal:</span><strong>${formatCurrency(totals.subtotal)}</strong></div>
-              <div class="cart-total-line"><span>TOTAL:</span><strong style="font-size:1.4rem;color:var(--accent)">${formatCurrency(totals.total)}</strong></div>
-            </div>
-          </div>
-        </aside>
-      </div>
-      <div class="pos-grid" style="margin-top:0;">
-        <div></div>
-        <aside class="panel cart-card">
-          <h3>Método de Pago</h3>
-          <div class="payment-grid">
-            <button type="button" class="payment-option ${state.paymentMethod === "efectivo" ? "active" : ""}" data-action="payment-method" data-method="efectivo">${iconMoney()} <span>Efectivo</span></button>
-            <button type="button" class="payment-option ${state.paymentMethod === "tarjeta" ? "active" : ""}" data-action="payment-method" data-method="tarjeta">${iconCard()} <span>Tarjeta</span></button>
-          </div>
-          <div class="payment-field" style="margin-top:14px;${state.paymentMethod === "efectivo" ? "" : "display:none;"}">
-            <label for="cash-input"><strong>Efectivo Recibido</strong></label>
-            <input class="input" id="cash-input" data-payment-field="cash" type="number" min="0" step="0.01" placeholder="$0.00" value="${escapeAttr(state.cashReceived)}" />
-          </div>
-          <div class="cart-footer">
-            <button class="button" type="button" data-action="finalize-sale" ${canFinalizeSale() ? "" : "disabled"}>${iconPrinter()} Finalizar Venta</button>
-          </div>
-        </aside>
+          </aside>
+        </div>
       </div>
     </section>
   `;
@@ -1112,10 +1110,6 @@ function cashiersView() {
       <div class="page-head">
         <div><h2>Cajeros</h2><div class="eyebrow">${active} de ${total} activos</div></div>
         <div class="section-actions"><button class="button ghost" type="button" data-action="refresh-cashiers">↻ Actualizar</button><button class="button" type="button" data-action="new-cashier">Nuevo Cajero</button></div>
-      </div>
-      <div class="page-head">
-        <div><h2>Cajeros</h2><div class="eyebrow">Total: ${total} | Conectados: ${active}</div></div>
-        <div class="section-actions"><button class="button" type="button" data-action="new-cashier">Nuevo Cajero</button></div>
       </div>
       <section class="panel cashiers-table">
         <div class="toolbar" style="margin-bottom:14px;"><div class="search-wrap"><span class="search-icon">${iconSearch()}</span><input class="search-input" data-search="cashier" type="text" placeholder="Buscar cajeros..." value="${escapeAttr(state.search.cashier)}" /></div></div>
@@ -1342,8 +1336,17 @@ function handleClick(event) {
       break;
     case "payment-method":
       state.paymentMethod = target.dataset.method;
-      if (state.paymentMethod === "tarjeta") state.cashReceived = String(cartTotals().total.toFixed(2));
+      if (state.paymentMethod === "tarjeta") {
+        const total = cartTotals().total.toFixed(2);
+        state.cashReceived = Number(total).toLocaleString("es-ES");
+      } else if (state.paymentMethod === "efectivo") {
+        state.cashReceived = "";
+      }
       render();
+      setTimeout(() => {
+        const btn = document.querySelector("[data-action='finalize-sale']");
+        if (btn) btn.disabled = !canFinalizeSale();
+      }, 0);
       break;
     case "finalize-sale":
       finalizeSale();
@@ -1591,6 +1594,20 @@ function handleInput(event) {
 
   if (!isSearchInput && !isPaymentField) return;
 
+  if (isPaymentField) {
+    let value = target.value.replace(/[^\d.]/g, "");
+    const parts = value.split(".");
+    if (parts.length > 2) value = parts[0] + "." + parts.slice(1).join("");
+    if (parts[1] && parts[1].length > 2) value = parts[0] + "." + parts[1].slice(0, 2);
+    if (parts[0]) parts[0] = Number(parts[0]).toLocaleString("es-ES");
+    const formattedValue = parts[0] + (parts[1] ? "." + parts[1] : "");
+    state.cashReceived = formattedValue;
+    target.value = formattedValue;
+    const btn = document.querySelector("[data-action='finalize-sale']");
+    if (btn) btn.disabled = !canFinalizeSale();
+    return;
+  }
+
   if (target.matches("[data-search='pos']")) {
     state.search.pos = target.value;
 
@@ -1706,14 +1723,23 @@ function cartTotals() {
 function canFinalizeSale() {
   if (!state.cart.length) return false;
   if (state.paymentMethod !== "efectivo") return true;
-  const cash = Number(state.cashReceived);
-  return Number.isFinite(cash) && cash >= cartTotals().total;
+  const cash = parseFloat(state.cashReceived.replace(/\./g, ""));
+  const total = cartTotals().total;
+  return Number.isFinite(cash) && cash >= total;
 }
 
 async function finalizeSale() {
-  if (!canFinalizeSale()) {
-    toast("Completa el carrito y el efectivo recibido para finalizar.", "warning");
+  if (!state.cart.length) {
+    toast("El carrito está vacío.", "warning");
     return;
+  }
+  if (state.paymentMethod === "efectivo") {
+    const cash = parseFloat(state.cashReceived.replace(/\./g, ""));
+    const total = cartTotals().total;
+    if (!Number.isFinite(cash) || cash < total) {
+      toast(`El efectivo recibido es menor al total ($${formatCurrency(total).replace('$', '')}).`, "danger");
+      return;
+    }
   }
   const turnoId = await getOrCreateTurnoCaja();
   if (!turnoId) {
@@ -1723,7 +1749,7 @@ async function finalizeSale() {
   const saleData = {
     turno_caja: turnoId,
     medio_pago: state.paymentMethod === "efectivo" ? "efectivo" : state.paymentMethod === "tarjeta" ? "tarjeta" : "transferencia",
-    monto_pagado: parseFloat(state.cashReceived) || cartTotals().total,
+    monto_pagado: parseFloat(state.cashReceived.replace(/\./g, "")) || cartTotals().total,
     detalles: state.cart.map(item => ({
       producto: item.id,
       cantidad: item.qty,
